@@ -175,7 +175,9 @@
     }
   </style>
   <script>
-    const TILE_SIZE = 250;
+    const DESKTOP_TILE_SIZE = 250;
+    const TABLET_TILE_SIZE = 200;
+    const MOBILE_TILE_SIZE = 160;
     const RESIZE_DEBOUNCE_MS = 120;
     const HOVER_DELAY_MS = 1000;
     const HOVER_IDLE_MS = 5000;
@@ -251,6 +253,26 @@
 
     function applyPageTitle() {
       document.title = getStationConfig().title;
+    }
+
+    function isTouchLikeDevice() {
+      return window.matchMedia("(hover: none), (pointer: coarse)").matches;
+    }
+
+    function getTileSize() {
+      if (window.innerWidth <= 640) {
+        return MOBILE_TILE_SIZE;
+      }
+
+      if (window.innerWidth <= 1024 || isTouchLikeDevice()) {
+        return TABLET_TILE_SIZE;
+      }
+
+      return DESKTOP_TILE_SIZE;
+    }
+
+    function applyResponsiveSizing() {
+      document.documentElement.style.setProperty("--tile-size", `${getTileSize()}px`);
     }
 
     function withCacheBust(url) {
@@ -443,9 +465,10 @@
     }
 
     function getGridDimensions() {
+      const tileSize = getTileSize();
       return {
-        columns: Math.max(1, Math.ceil(window.innerWidth / TILE_SIZE)),
-        rows: Math.max(1, Math.ceil(window.innerHeight / TILE_SIZE))
+        columns: Math.max(1, Math.ceil(window.innerWidth / tileSize)),
+        rows: Math.max(1, Math.ceil(window.innerHeight / tileSize))
       };
     }
 
@@ -485,12 +508,13 @@
     function syncWallLayout(itemCount) {
       const wall = document.getElementById("wall");
       const { columns } = getGridDimensions();
+      const tileSize = getTileSize();
       const rows = Math.max(1, Math.ceil(itemCount / columns));
 
-      wall.style.gridTemplateColumns = `repeat(${columns}, ${TILE_SIZE}px)`;
-      wall.style.gridTemplateRows = `repeat(${rows}, ${TILE_SIZE}px)`;
-      wall.style.width = `${columns * TILE_SIZE}px`;
-      wall.style.height = `${rows * TILE_SIZE}px`;
+      wall.style.gridTemplateColumns = `repeat(${columns}, ${tileSize}px)`;
+      wall.style.gridTemplateRows = `repeat(${rows}, ${tileSize}px)`;
+      wall.style.width = `${columns * tileSize}px`;
+      wall.style.height = `${rows * tileSize}px`;
     }
 
     function createTile(item, index, eagerThreshold = 0) {
@@ -641,6 +665,10 @@
 
     function attachHoverBehavior(tile, item) {
       tile.addEventListener("mouseenter", (event) => {
+        if (isTouchLikeDevice()) {
+          return;
+        }
+
         hoverPoint = { x: event.clientX + 16, y: event.clientY + 16 };
         window.clearTimeout(hoverTimer);
         hoverTimer = window.setTimeout(() => {
@@ -649,10 +677,18 @@
       });
 
       tile.addEventListener("mousemove", (event) => {
+        if (isTouchLikeDevice()) {
+          return;
+        }
+
         hoverPoint = { x: event.clientX + 16, y: event.clientY + 16 };
       });
 
       tile.addEventListener("mouseleave", () => {
+        if (isTouchLikeDevice()) {
+          return;
+        }
+
         window.clearTimeout(hoverTimer);
         hoverTimer = null;
         hoverPoint = null;
@@ -660,6 +696,22 @@
         if (activeHoverTile === tile) {
           clearHoverState();
         }
+      });
+
+      tile.addEventListener("pointerup", (event) => {
+        if (!isTouchLikeDevice() || event.pointerType === "mouse") {
+          return;
+        }
+
+        event.preventDefault();
+        hoverPoint = { x: event.clientX + 16, y: event.clientY + 16 };
+
+        if (activeHoverItemId === item.id) {
+          clearHoverState();
+          return;
+        }
+
+        showHoverOverlay(tile, item);
       });
     }
 
@@ -835,6 +887,7 @@
     function handleResize() {
       window.clearTimeout(resizeTimer);
       resizeTimer = window.setTimeout(() => {
+        applyResponsiveSizing();
         if (latestArtwork.length) {
           renderArtwork(latestArtwork);
         }
@@ -842,6 +895,7 @@
     }
 
     function start() {
+      applyResponsiveSizing();
       applyPageTitle();
       showStatus("Loading artwork");
       refreshArtwork();
@@ -864,6 +918,18 @@
           clearHoverState();
         }
       });
+      window.addEventListener("pointermove", (event) => {
+        if (event.pointerType === "mouse" || !activeHoverTile || !overlayAnchorPoint) {
+          return;
+        }
+
+        const nextPoint = { x: event.clientX + 16, y: event.clientY + 16 };
+        const moved = nextPoint.x !== overlayAnchorPoint.x || nextPoint.y !== overlayAnchorPoint.y;
+
+        if (moved) {
+          clearHoverState();
+        }
+      }, { passive: true });
     }
 
     window.addEventListener("DOMContentLoaded", start);
