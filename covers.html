@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Alcast Covers</title>
+  <style>
+    :root {
+      --tile-size: 250px;
+      --flip-duration: 450ms;
+      --row-stagger: 100ms;
+      --bg: #050505;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: var(--bg);
+      font-family: Helvetica, Arial, sans-serif;
+    }
+
+    body {
+      position: relative;
+    }
+
+    #wall {
+      position: absolute;
+      inset: 0 auto auto 0;
+      display: grid;
+      transform-origin: top left;
+      perspective: 1200px;
+    }
+
+    .tile {
+      width: var(--tile-size);
+      height: var(--tile-size);
+      overflow: hidden;
+      background:
+        linear-gradient(135deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0)),
+        #111;
+      backface-visibility: hidden;
+      transform-origin: center center;
+      will-change: transform, opacity;
+    }
+
+    .tile img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      object-position: left top;
+      user-select: none;
+      -webkit-user-drag: none;
+      pointer-events: none;
+    }
+
+    .tile.flip {
+      animation: flip-in var(--flip-duration) linear both;
+      animation-delay: var(--row-delay-value, 0ms);
+    }
+
+    #status {
+      position: absolute;
+      left: 12px;
+      bottom: 12px;
+      z-index: 2;
+      padding: 8px 10px;
+      border-radius: 999px;
+      background: rgba(0, 0, 0, 0.7);
+      color: rgba(255, 255, 255, 0.88);
+      font-size: 12px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    #status[hidden] {
+      display: none;
+    }
+
+    @keyframes flip-in {
+      0% {
+        opacity: 0;
+        transform: rotateX(-90deg) scale(0.88);
+      }
+
+      60% {
+        opacity: 1;
+        transform: rotateX(14deg) scale(1.02);
+      }
+
+      100% {
+        opacity: 1;
+        transform: rotateX(0deg) scale(1);
+      }
+    }
+  </style>
+  <script>
+    const TILE_SIZE = 250;
+    const REFRESH_INTERVAL_MS = 60000;
+    const RESIZE_DEBOUNCE_MS = 120;
+    const API_URL = "https://mastodon.social/api/v1/accounts/115476991857289916/statuses?limit=40&exclude_replies=true";
+    const RSS_URL = "https://mastodon.social/@alcastradio.rss";
+
+    let latestArtwork = [];
+    let refreshTimer = null;
+    let resizeTimer = null;
+    let refreshInFlight = false;
+
+    function withCacheBust(url) {
+      const nextUrl = new URL(url);
+      nextUrl.searchParams.set("_", String(Date.now()));
+      return nextUrl.toString();
+    }
+
+    async function fetchArtworkFromApi() {
+      const response = await fetch(withCacheBust(API_URL), { cache: "no-store" });
+
+      if (!response.ok) {
+        throw new Error("Mastodon API request failed");
+      }
+
+      const statuses = await response.json();
+      return statuses
+        .flatMap((status) => (status.media_attachments || [])
+          .filter((media) => media.type === "image")
+          .map((media, index) => ({
+            id: `${status.id}-${media.id || index}`,
+            url: media.url || media.preview_url,
+            alt: media.description || stripHtml(status.content) || "Album cover artwork"
+          })))
+        .filter((item) => item.url);
+    }
+
+    async function fetchArtworkFromRss() {
+      const response = await fetch(withCacheBust(RSS_URL), { cache: "no-store" });
+
+      if (!response.ok) {
+        throw new Error("Mastodon RSS request failed");
+      }
+
+      const rssText = await response.text();
+      const xml = new DOMParser().parseFromString(rssText, "application/xml");
+      const items = Array.from(xml.querySelectorAll("item"));
+
+      return items
+        .map((item, index) => {
+          const mediaNode = item.querySelector("media\\:content, content");
+          if (!mediaNode) {
+            return null;
+          }
+
+          return {
+            id: item.querySelector("guid")?.textContent?.trim() || `rss-${index}`,
+            url: mediaNode.getAttribute("url"),
+            alt: item.querySelector("media\\:description, description")?.textContent?.trim() || "Album cover artwork"
+          };
+        })
+        .filter((item) => item && item.url);
+    }
+
+    function stripHtml(value) {
+      const doc = new DOMParser().parseFromString(value || "", "text/html");
+      return doc.body.textContent ? doc.body.textContent.trim() : "";
+    }
+
+    function getGridDimensions() {
+      return {
+        columns: Math.max(1, Math.ceil(window.innerWidth / TILE_SIZE)),
+        rows: Math.max(1, Math.ceil(window.innerHeight / TILE_SIZE))
+      };
+    }
+
+    function buildVisibleArtwork(sourceItems, totalTiles) {
+      if (!sourceItems.length) {
+        return [];
+      }
+
+      return Array.from({ length: totalTiles }, (_, index) => sourceItems[index % sourceItems.length]);
+    }
+
+    function buildRandomDelays(totalTiles) {
+      const order = Array.from({ length: totalTiles }, (_, index) => index);
+
+      for (let index = order.length - 1; index > 0; index -= 1) {
+        const swapIndex = Math.floor(Math.random() * (index + 1));
+        [order[index], order[swapIndex]] = [order[swapIndex], order[index]];
+      }
+
+      const delays = new Array(totalTiles);
+      order.forEach((tileIndex, animationIndex) => {
+        delays[tileIndex] = animationIndex * 50;
+      });
+      return delays;
+    }
+
+    function showStatus(message) {
+      const node = document.getElementById("status");
+      node.textContent = message;
+      node.hidden = false;
+    }
+
+    function hideStatus() {
+      document.getElementById("status").hidden = true;
+    }
+
+    function renderArtwork(items) {
+      const wall = document.getElementById("wall");
+      const { columns, rows } = getGridDimensions();
+      const totalTiles = columns * rows;
+      const visibleItems = buildVisibleArtwork(items, totalTiles);
+      const randomDelays = buildRandomDelays(totalTiles);
+
+      wall.style.gridTemplateColumns = `repeat(${columns}, ${TILE_SIZE}px)`;
+      wall.style.gridTemplateRows = `repeat(${rows}, ${TILE_SIZE}px)`;
+      wall.style.width = `${columns * TILE_SIZE}px`;
+      wall.style.height = `${rows * TILE_SIZE}px`;
+
+      const fragment = document.createDocumentFragment();
+
+      visibleItems.forEach((item, index) => {
+        const tile = document.createElement("div");
+        tile.className = "tile flip";
+        tile.style.setProperty("--row-delay-value", `${randomDelays[index]}ms`);
+
+        const img = document.createElement("img");
+        img.src = item.url;
+        img.alt = item.alt;
+        img.loading = index < columns * 2 ? "eager" : "lazy";
+        img.decoding = "async";
+
+        tile.appendChild(img);
+        fragment.appendChild(tile);
+      });
+
+      wall.replaceChildren(fragment);
+      hideStatus();
+    }
+
+    async function refreshArtwork() {
+      if (refreshInFlight) {
+        return;
+      }
+
+      refreshInFlight = true;
+
+      try {
+        let artwork = [];
+
+        try {
+          artwork = await fetchArtworkFromApi();
+        } catch (apiError) {
+          artwork = await fetchArtworkFromRss();
+        }
+
+        if (!artwork.length) {
+          throw new Error("No artwork found in the Mastodon feed");
+        }
+
+        latestArtwork = artwork;
+        renderArtwork(latestArtwork);
+      } catch (error) {
+        if (latestArtwork.length) {
+          renderArtwork(latestArtwork);
+          showStatus("Using cached artwork");
+        } else {
+          showStatus("Unable to load Mastodon artwork");
+        }
+      } finally {
+        refreshInFlight = false;
+      }
+    }
+
+    function handleResize() {
+      window.clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(() => {
+        if (latestArtwork.length) {
+          renderArtwork(latestArtwork);
+        }
+      }, RESIZE_DEBOUNCE_MS);
+    }
+
+    function start() {
+      showStatus("Loading artwork");
+      refreshArtwork();
+      refreshTimer = window.setInterval(refreshArtwork, REFRESH_INTERVAL_MS);
+      window.addEventListener("resize", handleResize);
+    }
+
+    window.addEventListener("DOMContentLoaded", start);
+  </script>
+</head>
+<body>
+  <div id="wall" aria-live="polite"></div>
+  <div id="status" hidden>Loading artwork</div>
+</body>
+</html>
