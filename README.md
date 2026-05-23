@@ -24,16 +24,9 @@ Then open:
 
 ## URL Parameters
 
-The page supports two query parameters:
+The page supports one query parameter:
 
 - `station`
-- `refresh`
-
-Parameters can be combined in any order.
-
-Example:
-
-- `http://127.0.0.1:8000/covers.html?station=kvcu&refresh=10`
 
 ## `station`
 
@@ -96,41 +89,11 @@ If `station` is present but not recognized, the page also falls back to `alcast`
 - `http://127.0.0.1:8000/covers.html?station=UNKNOWN`
   Falls back to `alcast`
 
-## `refresh`
+## Refresh Behavior
 
-`refresh` controls how often the page checks for new artwork.
+The page checks for new artwork every 15 seconds.
 
-The value is interpreted as seconds.
-
-If `refresh` is missing, the page defaults to `30` seconds.
-
-If `refresh` is present and greater than `0`, that value is used.
-
-If `refresh` is `0`, negative, empty, or not numeric, the page falls back to `30` seconds.
-
-### `refresh` examples
-
-- `http://127.0.0.1:8000/covers.html?refresh=5`
-  Checks for updates every 5 seconds
-
-- `http://127.0.0.1:8000/covers.html?refresh=10`
-  Checks for updates every 10 seconds
-
-- `http://127.0.0.1:8000/covers.html?refresh=60`
-  Checks for updates every 60 seconds
-
-- `http://127.0.0.1:8000/covers.html?refresh=abc`
-  Falls back to 30 seconds
-
-## Combining Parameters
-
-Both parameters can be used together.
-
-Examples:
-
-- `http://127.0.0.1:8000/covers.html?station=kvcu&refresh=10`
-- `http://127.0.0.1:8000/covers.html?refresh=15&station=kuvo`
-- `http://127.0.0.1:8000/covers.html?station=KJAC&refresh=45`
+This interval is built into the page and is not configurable by URL parameter.
 
 ## Feed Behavior
 
@@ -185,7 +148,7 @@ Hover behavior works like this:
 The page:
 
 - Fills the viewport with a responsive grid
-- Uses `250x250` tiles
+- Uses responsive square tiles sized to fit the window width cleanly
 - Crops artwork to square using `object-fit: cover`
 - Refreshes dynamically without a full page reload
 - Animates redraws in randomized tile order

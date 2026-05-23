@@ -53,8 +53,8 @@
 
     .tile {
       position: relative;
-      width: var(--tile-size);
-      height: var(--tile-size);
+      width: 100%;
+      aspect-ratio: 1 / 1;
       overflow: hidden;
       background:
         linear-gradient(135deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0)),
@@ -231,14 +231,7 @@
     let isLoadingOlderArtwork = false;
 
     function getRefreshIntervalMs() {
-      const params = new URLSearchParams(window.location.search);
-      const refreshValue = Number(params.get("refresh"));
-
-      if (Number.isFinite(refreshValue) && refreshValue > 0) {
-        return refreshValue * 1000;
-      }
-
-      return 30000;
+      return 15000;
     }
 
     function getStationKey() {
@@ -259,20 +252,35 @@
       return window.matchMedia("(hover: none), (pointer: coarse)").matches;
     }
 
-    function getTileSize() {
-      if (window.innerWidth <= 640) {
-        return MOBILE_TILE_SIZE;
+    function getLayoutMetrics() {
+      const width = Math.max(window.innerWidth, 1);
+      let columns;
+
+      if (width <= 640) {
+        columns = 3;
+      } else if (width <= 1024 || isTouchLikeDevice()) {
+        columns = 4;
+      } else {
+        const fullColumns = Math.max(1, Math.floor(width / DESKTOP_TILE_SIZE));
+        const partialVisible = (width - (fullColumns * DESKTOP_TILE_SIZE)) / DESKTOP_TILE_SIZE;
+
+        if (partialVisible > 0.5) {
+          columns = fullColumns;
+        } else {
+          columns = Math.max(1, Math.ceil(width / DESKTOP_TILE_SIZE));
+        }
       }
 
-      if (window.innerWidth <= 1024 || isTouchLikeDevice()) {
-        return TABLET_TILE_SIZE;
-      }
-
-      return DESKTOP_TILE_SIZE;
+      const tileSize = width / columns;
+      return {
+        columns,
+        rows: Math.max(1, Math.ceil(window.innerHeight / tileSize)),
+        tileSize
+      };
     }
 
     function applyResponsiveSizing() {
-      document.documentElement.style.setProperty("--tile-size", `${getTileSize()}px`);
+      document.documentElement.style.setProperty("--tile-size", `${getLayoutMetrics().tileSize}px`);
     }
 
     function withCacheBust(url) {
@@ -465,11 +473,7 @@
     }
 
     function getGridDimensions() {
-      const tileSize = getTileSize();
-      return {
-        columns: Math.max(1, Math.ceil(window.innerWidth / tileSize)),
-        rows: Math.max(1, Math.ceil(window.innerHeight / tileSize))
-      };
+      return getLayoutMetrics();
     }
 
     function getMinimumVisibleCount() {
@@ -479,6 +483,14 @@
 
     function mergeArtwork(newerItems, olderItems) {
       return sortArtworkNewestFirst(dedupeArtwork([...newerItems, ...olderItems]));
+    }
+
+    function artworkListsMatch(leftItems, rightItems) {
+      if (leftItems.length !== rightItems.length) {
+        return false;
+      }
+
+      return leftItems.every((item, index) => item.id === rightItems[index]?.id);
     }
 
     function preloadArtwork(items) {
@@ -508,13 +520,11 @@
     function syncWallLayout(itemCount) {
       const wall = document.getElementById("wall");
       const { columns } = getGridDimensions();
-      const tileSize = getTileSize();
-      const rows = Math.max(1, Math.ceil(itemCount / columns));
 
-      wall.style.gridTemplateColumns = `repeat(${columns}, ${tileSize}px)`;
-      wall.style.gridTemplateRows = `repeat(${rows}, ${tileSize}px)`;
-      wall.style.width = `${columns * tileSize}px`;
-      wall.style.height = `${rows * tileSize}px`;
+      wall.style.gridTemplateColumns = `repeat(${columns}, minmax(0, 1fr))`;
+      wall.style.gridTemplateRows = "";
+      wall.style.width = "100%";
+      wall.style.height = "auto";
     }
 
     function createTile(item, index, eagerThreshold = 0) {
@@ -855,22 +865,30 @@
 
         try {
           const apiResult = await fetchArtworkFromApi(getMinimumVisibleCount());
-          latestArtwork = mergeArtwork(apiResult.artwork, latestArtwork);
+          const mergedArtwork = mergeArtwork(apiResult.artwork, latestArtwork);
 
           if (!nextOlderMaxId && apiResult.nextMaxId) {
             nextOlderMaxId = apiResult.nextMaxId;
             hasMoreOlderArtwork = apiResult.hasMore;
           }
+
+          if (!artworkListsMatch(mergedArtwork, latestArtwork)) {
+            latestArtwork = mergedArtwork;
+            await renderArtwork(latestArtwork);
+          }
         } catch (apiError) {
           const rssArtwork = await fetchArtworkFromRss();
-          latestArtwork = mergeArtwork(rssArtwork, latestArtwork);
+          const mergedArtwork = mergeArtwork(rssArtwork, latestArtwork);
+
+          if (!artworkListsMatch(mergedArtwork, latestArtwork)) {
+            latestArtwork = mergedArtwork;
+            await renderArtwork(latestArtwork);
+          }
         }
 
         if (!latestArtwork.length) {
           throw new Error("No artwork found in the Mastodon feed");
         }
-
-        await renderArtwork(latestArtwork);
       } catch (error) {
         if (latestArtwork.length) {
           await renderArtwork(latestArtwork);
