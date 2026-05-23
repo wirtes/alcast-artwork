@@ -10,6 +10,7 @@
       --flip-duration: 450ms;
       --row-stagger: 100ms;
       --bg: #050505;
+      --overlay-width: min(640px, calc(100vw - 48px));
     }
 
     * {
@@ -39,6 +40,7 @@
     }
 
     .tile {
+      position: relative;
       width: var(--tile-size);
       height: var(--tile-size);
       overflow: hidden;
@@ -66,6 +68,10 @@
       animation-delay: var(--row-delay-value, 0ms);
     }
 
+    .tile.jiggle img {
+      animation: jiggle 450ms linear 2;
+    }
+
     #status {
       position: absolute;
       left: 12px;
@@ -84,6 +90,39 @@
       display: none;
     }
 
+    #hover-overlay {
+      position: absolute;
+      z-index: 3;
+      left: 0;
+      top: 0;
+      pointer-events: none;
+      opacity: 0;
+      transform: translateY(12px);
+      transition: opacity 180ms linear, transform 180ms linear;
+    }
+
+    #hover-overlay.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    #hover-overlay-card {
+      width: var(--overlay-width);
+      padding: 14px 18px;
+      border: 1px solid rgba(255, 255, 255, 0.72);
+      border-radius: 16px;
+      background: rgba(232, 228, 219, 0.97);
+      color: rgba(18, 18, 18, 0.96);
+      backdrop-filter: blur(18px);
+      box-shadow:
+        0 12px 28px rgba(0, 0, 0, 0.28),
+        0 30px 64px rgba(0, 0, 0, 0.42);
+      font-size: 15px;
+      line-height: 1.45;
+      letter-spacing: 0.01em;
+      text-wrap: balance;
+    }
+
     @keyframes flip-in {
       0% {
         opacity: 0;
@@ -100,18 +139,103 @@
         transform: rotateX(0deg) scale(1);
       }
     }
+
+    @keyframes jiggle {
+      0% {
+        transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+      }
+
+      25% {
+        transform: translate3d(-1px, 0, 0) rotate(-0.4deg) scale(1.01);
+      }
+
+      50% {
+        transform: translate3d(1px, -1px, 0) rotate(0.35deg) scale(1.012);
+      }
+
+      75% {
+        transform: translate3d(0, 1px, 0) rotate(-0.25deg) scale(1.008);
+      }
+
+      100% {
+        transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+      }
+    }
   </style>
   <script>
     const TILE_SIZE = 250;
-    const REFRESH_INTERVAL_MS = 60000;
     const RESIZE_DEBOUNCE_MS = 120;
-    const API_URL = "https://mastodon.social/api/v1/accounts/115476991857289916/statuses?limit=40&exclude_replies=true";
-    const RSS_URL = "https://mastodon.social/@alcastradio.rss";
+    const HOVER_DELAY_MS = 1000;
+    const HOVER_IDLE_MS = 5000;
+    const API_PAGE_SIZE = 40;
+    const API_MAX_PAGES = 8;
+    const LOOKUP_URL = "https://mastodon.social/api/v1/accounts/lookup";
+    const STATION_CONFIGS = {
+      alcast: {
+        acct: "alcastradio",
+        profileUrl: "https://mastodon.social/@alcastradio",
+        title: "Alcast Radio"
+      },
+      kvcu: {
+        acct: "1190playlist@mastodon.social",
+        profileUrl: "https://mastodon.social/@1190playlist@mastodon.social",
+        title: "Radio 1190 Playlist"
+      },
+      kuvo: {
+        acct: "kuvo_playlist",
+        profileUrl: "https://mastodon.social/@kuvo_playlist",
+        title: "KUVO Playlist"
+      },
+      kjac: {
+        acct: "the_colorado_sound_playlist",
+        profileUrl: "https://mastodon.social/@the_colorado_sound_playlist",
+        title: "The Colorado Sound Playlist"
+      },
+      kvoq: {
+        acct: "indie1023_playlist",
+        profileUrl: "https://mastodon.social/@indie1023_playlist",
+        title: "Indie 102.3 Playlist"
+      }
+    };
 
     let latestArtwork = [];
     let refreshTimer = null;
     let resizeTimer = null;
     let refreshInFlight = false;
+    let hoverTimer = null;
+    let activeHoverTile = null;
+    let activeHoverItemId = null;
+    let activeHoverText = "";
+    let hoverPoint = null;
+    let overlayAnchorPoint = null;
+    let hasCompletedInitialRender = false;
+    let hoverIdleTimer = null;
+    let stationAccountPromise = null;
+
+    function getRefreshIntervalMs() {
+      const params = new URLSearchParams(window.location.search);
+      const refreshValue = Number(params.get("refresh"));
+
+      if (Number.isFinite(refreshValue) && refreshValue > 0) {
+        return refreshValue * 1000;
+      }
+
+      return 30000;
+    }
+
+    function getStationKey() {
+      const params = new URLSearchParams(window.location.search);
+      const stationValue = (params.get("station") || "alcast").toLowerCase();
+      return STATION_CONFIGS[stationValue] ? stationValue : "alcast";
+    }
+
+    function getStationConfig() {
+      return STATION_CONFIGS[getStationKey()];
+    }
+
+    function applyPageTitle() {
+      document.title = getStationConfig().title;
+    }
 
     function withCacheBust(url) {
       const nextUrl = new URL(url);
@@ -119,27 +243,114 @@
       return nextUrl.toString();
     }
 
-    async function fetchArtworkFromApi() {
-      const response = await fetch(withCacheBust(API_URL), { cache: "no-store" });
-
-      if (!response.ok) {
-        throw new Error("Mastodon API request failed");
+    async function getStationAccount() {
+      if (stationAccountPromise) {
+        return stationAccountPromise;
       }
 
-      const statuses = await response.json();
+      stationAccountPromise = (async () => {
+        const stationConfig = getStationConfig();
+        const nextUrl = new URL(LOOKUP_URL);
+        nextUrl.searchParams.set("acct", stationConfig.acct);
+
+        const response = await fetch(withCacheBust(nextUrl.toString()), { cache: "no-store" });
+
+        if (!response.ok) {
+          throw new Error("Mastodon account lookup failed");
+        }
+
+        return response.json();
+      })();
+
+      return stationAccountPromise;
+    }
+
+    function buildApiPageUrl(accountId, maxId) {
+      const nextUrl = new URL(`https://mastodon.social/api/v1/accounts/${accountId}/statuses`);
+      nextUrl.searchParams.set("limit", String(API_PAGE_SIZE));
+      nextUrl.searchParams.set("exclude_replies", "true");
+
+      if (maxId) {
+        nextUrl.searchParams.set("max_id", maxId);
+      }
+
+      return nextUrl.toString();
+    }
+
+    function getRssUrl() {
+      return `${getStationConfig().profileUrl}.rss`;
+    }
+
+    function extractArtworkFromStatuses(statuses) {
       return statuses
         .flatMap((status) => (status.media_attachments || [])
           .filter((media) => media.type === "image")
           .map((media, index) => ({
             id: `${status.id}-${media.id || index}`,
+            statusId: status.id,
+            createdAt: status.created_at,
             url: media.url || media.preview_url,
-            alt: media.description || stripHtml(status.content) || "Album cover artwork"
+            alt: media.description || stripHtml(status.content) || "Album cover artwork",
+            text: cleanOverlayText(stripHtml(status.content) || media.description || "Album cover artwork")
           })))
         .filter((item) => item.url);
     }
 
+    function dedupeArtwork(items) {
+      const seen = new Set();
+      return items.filter((item) => {
+        const key = item.url || item.id;
+
+        if (seen.has(key)) {
+          return false;
+        }
+
+        seen.add(key);
+        return true;
+      });
+    }
+
+    function sortArtworkNewestFirst(items) {
+      return [...items].sort((left, right) => {
+        const createdCompare = new Date(right.createdAt || 0).getTime() - new Date(left.createdAt || 0).getTime();
+
+        if (createdCompare !== 0) {
+          return createdCompare;
+        }
+
+        return String(right.statusId || right.id).localeCompare(String(left.statusId || left.id));
+      });
+    }
+
+    async function fetchArtworkFromApi(minimumCount) {
+      const account = await getStationAccount();
+      const allArtwork = [];
+      let maxId = null;
+      let page = 0;
+
+      while (page < API_MAX_PAGES && allArtwork.length < minimumCount) {
+        const response = await fetch(withCacheBust(buildApiPageUrl(account.id, maxId)), { cache: "no-store" });
+
+        if (!response.ok) {
+          throw new Error("Mastodon API request failed");
+        }
+
+        const statuses = await response.json();
+
+        if (!statuses.length) {
+          break;
+        }
+
+        allArtwork.push(...extractArtworkFromStatuses(statuses));
+        maxId = statuses[statuses.length - 1].id;
+        page += 1;
+      }
+
+      return sortArtworkNewestFirst(dedupeArtwork(allArtwork));
+    }
+
     async function fetchArtworkFromRss() {
-      const response = await fetch(withCacheBust(RSS_URL), { cache: "no-store" });
+      const response = await fetch(withCacheBust(getRssUrl()), { cache: "no-store" });
 
       if (!response.ok) {
         throw new Error("Mastodon RSS request failed");
@@ -158,16 +369,51 @@
 
           return {
             id: item.querySelector("guid")?.textContent?.trim() || `rss-${index}`,
+            statusId: item.querySelector("guid")?.textContent?.trim() || `rss-${index}`,
+            createdAt: item.querySelector("pubDate")?.textContent?.trim() || "",
             url: mediaNode.getAttribute("url"),
-            alt: item.querySelector("media\\:description, description")?.textContent?.trim() || "Album cover artwork"
+            alt: item.querySelector("media\\:description, description")?.textContent?.trim() || "Album cover artwork",
+            text: cleanOverlayText(stripHtml(item.querySelector("description")?.textContent?.trim() || "")
+              || item.querySelector("media\\:description, description")?.textContent?.trim()
+              || "Album cover artwork")
           };
         })
-        .filter((item) => item && item.url);
+        .filter((item) => item && item.url)
+        .sort((left, right) => new Date(right.createdAt || 0).getTime() - new Date(left.createdAt || 0).getTime());
     }
 
     function stripHtml(value) {
       const doc = new DOMParser().parseFromString(value || "", "text/html");
-      return doc.body.textContent ? doc.body.textContent.trim() : "";
+      doc.querySelectorAll("br").forEach((node) => {
+        node.replaceWith("\n");
+      });
+      doc.querySelectorAll("p").forEach((node) => {
+        if (node.nextSibling) {
+          node.append("\n");
+        }
+      });
+      return doc.body.textContent ? doc.body.textContent.replace(/\n{3,}/g, "\n\n").trim() : "";
+    }
+
+    function cleanOverlayText(value) {
+      const lines = (value || "")
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+
+      while (lines.length && /^#/.test(lines[lines.length - 1])) {
+        lines.pop();
+      }
+
+      if (!lines.length) {
+        return "";
+      }
+
+      lines[lines.length - 1] = lines[lines.length - 1]
+        .replace(/\s+#.+$/u, "")
+        .trim();
+
+      return lines.join("\n").trim();
     }
 
     function getGridDimensions() {
@@ -182,7 +428,16 @@
         return [];
       }
 
-      return Array.from({ length: totalTiles }, (_, index) => sourceItems[index % sourceItems.length]);
+      return sourceItems.slice(0, totalTiles);
+    }
+
+    function preloadArtwork(items) {
+      return Promise.all(items.map((item) => new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => resolve();
+        img.onerror = () => resolve();
+        img.src = item.url;
+      })));
     }
 
     function buildRandomDelays(totalTiles) {
@@ -210,23 +465,143 @@
       document.getElementById("status").hidden = true;
     }
 
-    function renderArtwork(items) {
+    function clearHoverState() {
+      window.clearTimeout(hoverTimer);
+      hoverTimer = null;
+      window.clearTimeout(hoverIdleTimer);
+      hoverIdleTimer = null;
+
+      if (activeHoverTile) {
+        activeHoverTile.classList.remove("jiggle");
+        activeHoverTile = null;
+      }
+
+      activeHoverItemId = null;
+      activeHoverText = "";
+      overlayAnchorPoint = null;
+
+      const overlay = document.getElementById("hover-overlay");
+      overlay.classList.remove("visible");
+      overlay.setAttribute("hidden", "");
+      document.getElementById("hover-overlay-card").textContent = "";
+    }
+
+    function positionHoverOverlay() {
+      const overlay = document.getElementById("hover-overlay");
+      const card = document.getElementById("hover-overlay-card");
+
+      if (!hoverPoint) {
+        overlay.style.left = "24px";
+        overlay.style.top = "24px";
+        return;
+      }
+
+      const maxLeft = Math.max(24, window.innerWidth - card.offsetWidth - 24);
+      const maxTop = Math.max(24, window.innerHeight - card.offsetHeight - 24);
+      const left = Math.min(Math.max(hoverPoint.x, 24), maxLeft);
+      const top = Math.min(Math.max(hoverPoint.y, 24), maxTop);
+
+      overlay.style.left = `${left}px`;
+      overlay.style.top = `${top}px`;
+    }
+
+    function hideHoverTileOnly() {
+      if (activeHoverTile) {
+        activeHoverTile.classList.remove("jiggle");
+        activeHoverTile = null;
+      }
+    }
+
+    function startHoverDismissTimer() {
+      window.clearTimeout(hoverIdleTimer);
+      hoverIdleTimer = null;
+
+      if (!activeHoverTile) {
+        return;
+      }
+
+      hoverIdleTimer = window.setTimeout(() => {
+        clearHoverState();
+      }, HOVER_IDLE_MS);
+    }
+
+    function showHoverOverlay(tile, item) {
+      window.clearTimeout(hoverTimer);
+      hoverTimer = null;
+      hideHoverTileOnly();
+
+      if (!item || !item.text) {
+        return;
+      }
+
+      activeHoverTile = tile;
+      activeHoverItemId = item.id;
+      activeHoverText = item.text;
+      overlayAnchorPoint = hoverPoint ? { ...hoverPoint } : null;
+      activeHoverTile.classList.add("jiggle");
+
+      const overlay = document.getElementById("hover-overlay");
+      document.getElementById("hover-overlay-card").textContent = item.text;
+      overlay.removeAttribute("hidden");
+      positionHoverOverlay();
+
+      window.requestAnimationFrame(() => {
+        overlay.classList.add("visible");
+      });
+
+      startHoverDismissTimer();
+    }
+
+    function attachHoverBehavior(tile, item) {
+      tile.addEventListener("mouseenter", (event) => {
+        hoverPoint = { x: event.clientX + 16, y: event.clientY + 16 };
+        window.clearTimeout(hoverTimer);
+        hoverTimer = window.setTimeout(() => {
+          showHoverOverlay(tile, item);
+        }, HOVER_DELAY_MS);
+      });
+
+      tile.addEventListener("mousemove", (event) => {
+        hoverPoint = { x: event.clientX + 16, y: event.clientY + 16 };
+      });
+
+      tile.addEventListener("mouseleave", () => {
+        window.clearTimeout(hoverTimer);
+        hoverTimer = null;
+        hoverPoint = null;
+
+        if (activeHoverTile === tile) {
+          clearHoverState();
+        }
+      });
+    }
+
+    async function renderArtwork(items) {
       const wall = document.getElementById("wall");
       const { columns, rows } = getGridDimensions();
       const totalTiles = columns * rows;
       const visibleItems = buildVisibleArtwork(items, totalTiles);
       const randomDelays = buildRandomDelays(totalTiles);
+      const shouldWaitForInitialLoad = !hasCompletedInitialRender;
+      const preservedHoverItemId = activeHoverItemId;
+      const preservedHoverText = activeHoverText;
+
+      if (shouldWaitForInitialLoad) {
+        await preloadArtwork(visibleItems);
+      }
 
       wall.style.gridTemplateColumns = `repeat(${columns}, ${TILE_SIZE}px)`;
       wall.style.gridTemplateRows = `repeat(${rows}, ${TILE_SIZE}px)`;
       wall.style.width = `${columns * TILE_SIZE}px`;
       wall.style.height = `${rows * TILE_SIZE}px`;
+      hideHoverTileOnly();
 
       const fragment = document.createDocumentFragment();
 
       visibleItems.forEach((item, index) => {
         const tile = document.createElement("div");
-        tile.className = "tile flip";
+        tile.className = "tile";
+        tile.dataset.itemId = item.id;
         tile.style.setProperty("--row-delay-value", `${randomDelays[index]}ms`);
 
         const img = document.createElement("img");
@@ -236,10 +611,32 @@
         img.decoding = "async";
 
         tile.appendChild(img);
+        attachHoverBehavior(tile, item);
         fragment.appendChild(tile);
       });
 
       wall.replaceChildren(fragment);
+
+      if (preservedHoverItemId && preservedHoverText) {
+        const nextHoverTile = wall.querySelector(`[data-item-id="${CSS.escape(preservedHoverItemId)}"]`);
+
+        if (nextHoverTile) {
+          showHoverOverlay(nextHoverTile, {
+            id: preservedHoverItemId,
+            text: preservedHoverText
+          });
+        } else {
+          clearHoverState();
+        }
+      }
+
+      window.requestAnimationFrame(() => {
+        wall.querySelectorAll(".tile").forEach((tile) => {
+          tile.classList.add("flip");
+        });
+      });
+
+      hasCompletedInitialRender = true;
       hideStatus();
     }
 
@@ -252,9 +649,11 @@
 
       try {
         let artwork = [];
+        const { columns, rows } = getGridDimensions();
+        const minimumCount = columns * rows;
 
         try {
-          artwork = await fetchArtworkFromApi();
+          artwork = await fetchArtworkFromApi(minimumCount);
         } catch (apiError) {
           artwork = await fetchArtworkFromRss();
         }
@@ -264,10 +663,10 @@
         }
 
         latestArtwork = artwork;
-        renderArtwork(latestArtwork);
+        await renderArtwork(latestArtwork);
       } catch (error) {
         if (latestArtwork.length) {
-          renderArtwork(latestArtwork);
+          await renderArtwork(latestArtwork);
           showStatus("Using cached artwork");
         } else {
           showStatus("Unable to load Mastodon artwork");
@@ -287,10 +686,23 @@
     }
 
     function start() {
+      applyPageTitle();
       showStatus("Loading artwork");
       refreshArtwork();
-      refreshTimer = window.setInterval(refreshArtwork, REFRESH_INTERVAL_MS);
+      refreshTimer = window.setInterval(refreshArtwork, getRefreshIntervalMs());
       window.addEventListener("resize", handleResize);
+      window.addEventListener("mousemove", (event) => {
+        if (!activeHoverTile || !overlayAnchorPoint) {
+          return;
+        }
+
+        const nextPoint = { x: event.clientX + 16, y: event.clientY + 16 };
+        const moved = nextPoint.x !== overlayAnchorPoint.x || nextPoint.y !== overlayAnchorPoint.y;
+
+        if (moved) {
+          clearHoverState();
+        }
+      });
     }
 
     window.addEventListener("DOMContentLoaded", start);
@@ -298,6 +710,9 @@
 </head>
 <body>
   <div id="wall" aria-live="polite"></div>
+  <div id="hover-overlay" hidden>
+    <div id="hover-overlay-card"></div>
+  </div>
   <div id="status" hidden>Loading artwork</div>
 </body>
 </html>
