@@ -21,19 +21,31 @@
     body {
       margin: 0;
       width: 100%;
-      height: 100%;
-      overflow: hidden;
+      min-height: 100%;
+      overflow-x: hidden;
+      overflow-y: auto;
       background: var(--bg);
       font-family: Helvetica, Arial, sans-serif;
     }
 
+    html {
+      scrollbar-width: none;
+    }
+
+    html::-webkit-scrollbar,
+    body::-webkit-scrollbar {
+      width: 0;
+      height: 0;
+      display: none;
+    }
+
     body {
       position: relative;
+      scrollbar-width: none;
     }
 
     #wall {
-      position: absolute;
-      inset: 0 auto auto 0;
+      position: relative;
       display: grid;
       transform-origin: top left;
       perspective: 1200px;
@@ -73,7 +85,7 @@
     }
 
     #status {
-      position: absolute;
+      position: fixed;
       left: 12px;
       bottom: 12px;
       z-index: 2;
@@ -91,7 +103,7 @@
     }
 
     #hover-overlay {
-      position: absolute;
+      position: fixed;
       z-index: 3;
       left: 0;
       top: 0;
@@ -167,6 +179,7 @@
     const RESIZE_DEBOUNCE_MS = 120;
     const HOVER_DELAY_MS = 1000;
     const HOVER_IDLE_MS = 5000;
+    const SCROLL_PRELOAD_VIEWPORTS = 2;
     const API_PAGE_SIZE = 40;
     const API_MAX_PAGES = 8;
     const LOOKUP_URL = "https://mastodon.social/api/v1/accounts/lookup";
@@ -211,6 +224,9 @@
     let hasCompletedInitialRender = false;
     let hoverIdleTimer = null;
     let stationAccountPromise = null;
+    let nextOlderMaxId = null;
+    let hasMoreOlderArtwork = true;
+    let isLoadingOlderArtwork = false;
 
     function getRefreshIntervalMs() {
       const params = new URLSearchParams(window.location.search);
@@ -322,31 +338,41 @@
       });
     }
 
-    async function fetchArtworkFromApi(minimumCount) {
+    async function fetchStatusesPage(accountId, maxId) {
+      const response = await fetch(withCacheBust(buildApiPageUrl(accountId, maxId)), { cache: "no-store" });
+
+      if (!response.ok) {
+        throw new Error("Mastodon API request failed");
+      }
+
+      return response.json();
+    }
+
+    async function fetchArtworkFromApi(minimumCount, startMaxId = null) {
       const account = await getStationAccount();
       const allArtwork = [];
-      let maxId = null;
+      let maxId = startMaxId;
       let page = 0;
+      let lastStatuses = [];
 
       while (page < API_MAX_PAGES && allArtwork.length < minimumCount) {
-        const response = await fetch(withCacheBust(buildApiPageUrl(account.id, maxId)), { cache: "no-store" });
-
-        if (!response.ok) {
-          throw new Error("Mastodon API request failed");
-        }
-
-        const statuses = await response.json();
+        const statuses = await fetchStatusesPage(account.id, maxId);
 
         if (!statuses.length) {
           break;
         }
 
+        lastStatuses = statuses;
         allArtwork.push(...extractArtworkFromStatuses(statuses));
         maxId = statuses[statuses.length - 1].id;
         page += 1;
       }
 
-      return sortArtworkNewestFirst(dedupeArtwork(allArtwork));
+      return {
+        artwork: sortArtworkNewestFirst(dedupeArtwork(allArtwork)),
+        nextMaxId: lastStatuses.length ? lastStatuses[lastStatuses.length - 1].id : maxId,
+        hasMore: Boolean(lastStatuses.length)
+      };
     }
 
     async function fetchArtworkFromRss() {
@@ -423,12 +449,13 @@
       };
     }
 
-    function buildVisibleArtwork(sourceItems, totalTiles) {
-      if (!sourceItems.length) {
-        return [];
-      }
+    function getMinimumVisibleCount() {
+      const { columns, rows } = getGridDimensions();
+      return columns * rows;
+    }
 
-      return sourceItems.slice(0, totalTiles);
+    function mergeArtwork(newerItems, olderItems) {
+      return sortArtworkNewestFirst(dedupeArtwork([...newerItems, ...olderItems]));
     }
 
     function preloadArtwork(items) {
@@ -455,10 +482,70 @@
       return delays;
     }
 
+    function syncWallLayout(itemCount) {
+      const wall = document.getElementById("wall");
+      const { columns } = getGridDimensions();
+      const rows = Math.max(1, Math.ceil(itemCount / columns));
+
+      wall.style.gridTemplateColumns = `repeat(${columns}, ${TILE_SIZE}px)`;
+      wall.style.gridTemplateRows = `repeat(${rows}, ${TILE_SIZE}px)`;
+      wall.style.width = `${columns * TILE_SIZE}px`;
+      wall.style.height = `${rows * TILE_SIZE}px`;
+    }
+
+    function createTile(item, index, eagerThreshold = 0) {
+      const tile = document.createElement("div");
+      tile.className = "tile";
+      tile.dataset.itemId = item.id;
+
+      const img = document.createElement("img");
+      img.src = item.url;
+      img.alt = item.alt;
+      img.loading = index < eagerThreshold ? "eager" : "lazy";
+      img.decoding = "async";
+
+      tile.appendChild(img);
+      attachHoverBehavior(tile, item);
+      return tile;
+    }
+
+    function isTileVisible(tile) {
+      const rect = tile.getBoundingClientRect();
+      return rect.bottom > 0 && rect.top < window.innerHeight;
+    }
+
+    function isTileNearViewport(tile) {
+      const rect = tile.getBoundingClientRect();
+      const margin = window.innerHeight * SCROLL_PRELOAD_VIEWPORTS;
+      return rect.bottom > -margin && rect.top < window.innerHeight + margin;
+    }
+
+    function animateVisibleTiles(tiles) {
+      const visibleTiles = tiles.filter(isTileVisible);
+      const delays = buildRandomDelays(visibleTiles.length);
+
+      visibleTiles.forEach((tile, index) => {
+        tile.style.setProperty("--row-delay-value", `${delays[index]}ms`);
+        tile.classList.add("flip");
+      });
+    }
+
+    function shouldLoadOlderArtwork() {
+      const remaining = document.documentElement.scrollHeight - (window.scrollY + window.innerHeight);
+      return remaining < window.innerHeight * 1.5;
+    }
+
     function showStatus(message) {
       const node = document.getElementById("status");
       node.textContent = message;
       node.hidden = false;
+    }
+
+    function scheduleRefresh() {
+      window.clearTimeout(refreshTimer);
+      refreshTimer = window.setTimeout(() => {
+        refreshArtwork();
+      }, getRefreshIntervalMs());
     }
 
     function hideStatus() {
@@ -578,41 +665,22 @@
 
     async function renderArtwork(items) {
       const wall = document.getElementById("wall");
-      const { columns, rows } = getGridDimensions();
-      const totalTiles = columns * rows;
-      const visibleItems = buildVisibleArtwork(items, totalTiles);
-      const randomDelays = buildRandomDelays(totalTiles);
+      const { columns } = getGridDimensions();
       const shouldWaitForInitialLoad = !hasCompletedInitialRender;
       const preservedHoverItemId = activeHoverItemId;
       const preservedHoverText = activeHoverText;
 
       if (shouldWaitForInitialLoad) {
-        await preloadArtwork(visibleItems);
+        await preloadArtwork(items.slice(0, getMinimumVisibleCount()));
       }
 
-      wall.style.gridTemplateColumns = `repeat(${columns}, ${TILE_SIZE}px)`;
-      wall.style.gridTemplateRows = `repeat(${rows}, ${TILE_SIZE}px)`;
-      wall.style.width = `${columns * TILE_SIZE}px`;
-      wall.style.height = `${rows * TILE_SIZE}px`;
+      syncWallLayout(items.length);
       hideHoverTileOnly();
 
       const fragment = document.createDocumentFragment();
 
-      visibleItems.forEach((item, index) => {
-        const tile = document.createElement("div");
-        tile.className = "tile";
-        tile.dataset.itemId = item.id;
-        tile.style.setProperty("--row-delay-value", `${randomDelays[index]}ms`);
-
-        const img = document.createElement("img");
-        img.src = item.url;
-        img.alt = item.alt;
-        img.loading = index < columns * 2 ? "eager" : "lazy";
-        img.decoding = "async";
-
-        tile.appendChild(img);
-        attachHoverBehavior(tile, item);
-        fragment.appendChild(tile);
+      items.forEach((item, index) => {
+        fragment.appendChild(createTile(item, index, columns * 2));
       });
 
       wall.replaceChildren(fragment);
@@ -631,12 +699,92 @@
       }
 
       window.requestAnimationFrame(() => {
-        wall.querySelectorAll(".tile").forEach((tile) => {
-          tile.classList.add("flip");
-        });
+        animateVisibleTiles(Array.from(wall.querySelectorAll(".tile")));
       });
 
       hasCompletedInitialRender = true;
+      hideStatus();
+    }
+
+    async function appendOlderArtwork(items) {
+      if (!items.length) {
+        return;
+      }
+
+      const wall = document.getElementById("wall");
+      const fragment = document.createDocumentFragment();
+      const startingIndex = wall.children.length;
+      const appendedTiles = [];
+
+      items.forEach((item, index) => {
+        const tile = createTile(item, startingIndex + index);
+        appendedTiles.push(tile);
+        fragment.appendChild(tile);
+      });
+
+      wall.appendChild(fragment);
+      syncWallLayout(latestArtwork.length);
+
+      const nearViewportItems = items.filter((_, index) => isTileNearViewport(appendedTiles[index]));
+
+      if (nearViewportItems.length) {
+        await preloadArtwork(nearViewportItems);
+      }
+
+      window.requestAnimationFrame(() => {
+        animateVisibleTiles(appendedTiles);
+      });
+    }
+
+    async function loadInitialArtwork() {
+      try {
+        const minimumCount = getMinimumVisibleCount();
+        const apiResult = await fetchArtworkFromApi(minimumCount);
+
+        latestArtwork = apiResult.artwork;
+        nextOlderMaxId = apiResult.nextMaxId;
+        hasMoreOlderArtwork = apiResult.hasMore;
+      } catch (apiError) {
+        latestArtwork = await fetchArtworkFromRss();
+        nextOlderMaxId = null;
+        hasMoreOlderArtwork = false;
+      }
+
+      await renderArtwork(latestArtwork);
+    }
+
+    async function loadOlderArtwork() {
+      if (isLoadingOlderArtwork || refreshInFlight || !hasMoreOlderArtwork || !nextOlderMaxId) {
+        return;
+      }
+
+      isLoadingOlderArtwork = true;
+
+      try {
+        showStatus("Loading older artwork");
+        const apiResult = await fetchArtworkFromApi(getMinimumVisibleCount(), nextOlderMaxId);
+        nextOlderMaxId = apiResult.nextMaxId;
+        hasMoreOlderArtwork = apiResult.hasMore;
+
+        if (apiResult.artwork.length) {
+          const existingIds = new Set(latestArtwork.map((item) => item.id));
+          const olderUniqueArtwork = apiResult.artwork.filter((item) => !existingIds.has(item.id));
+          latestArtwork = mergeArtwork(latestArtwork, olderUniqueArtwork);
+          await appendOlderArtwork(olderUniqueArtwork);
+
+          if (shouldLoadOlderArtwork() && hasMoreOlderArtwork) {
+            loadOlderArtwork();
+          }
+        } else if (!apiResult.hasMore) {
+          hasMoreOlderArtwork = false;
+        }
+      } catch (error) {
+        showStatus("Unable to load older artwork");
+        return;
+      } finally {
+        isLoadingOlderArtwork = false;
+      }
+
       hideStatus();
     }
 
@@ -648,21 +796,28 @@
       refreshInFlight = true;
 
       try {
-        let artwork = [];
-        const { columns, rows } = getGridDimensions();
-        const minimumCount = columns * rows;
-
-        try {
-          artwork = await fetchArtworkFromApi(minimumCount);
-        } catch (apiError) {
-          artwork = await fetchArtworkFromRss();
+        if (!latestArtwork.length) {
+          await loadInitialArtwork();
+          return;
         }
 
-        if (!artwork.length) {
+        try {
+          const apiResult = await fetchArtworkFromApi(getMinimumVisibleCount());
+          latestArtwork = mergeArtwork(apiResult.artwork, latestArtwork);
+
+          if (!nextOlderMaxId && apiResult.nextMaxId) {
+            nextOlderMaxId = apiResult.nextMaxId;
+            hasMoreOlderArtwork = apiResult.hasMore;
+          }
+        } catch (apiError) {
+          const rssArtwork = await fetchArtworkFromRss();
+          latestArtwork = mergeArtwork(rssArtwork, latestArtwork);
+        }
+
+        if (!latestArtwork.length) {
           throw new Error("No artwork found in the Mastodon feed");
         }
 
-        latestArtwork = artwork;
         await renderArtwork(latestArtwork);
       } catch (error) {
         if (latestArtwork.length) {
@@ -673,6 +828,7 @@
         }
       } finally {
         refreshInFlight = false;
+        scheduleRefresh();
       }
     }
 
@@ -689,8 +845,13 @@
       applyPageTitle();
       showStatus("Loading artwork");
       refreshArtwork();
-      refreshTimer = window.setInterval(refreshArtwork, getRefreshIntervalMs());
       window.addEventListener("resize", handleResize);
+      window.addEventListener("scroll", () => {
+        scheduleRefresh();
+        if (shouldLoadOlderArtwork()) {
+          loadOlderArtwork();
+        }
+      }, { passive: true });
       window.addEventListener("mousemove", (event) => {
         if (!activeHoverTile || !overlayAnchorPoint) {
           return;
