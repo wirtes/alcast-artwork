@@ -11,6 +11,7 @@
       --row-stagger: 100ms;
       --bg: #050505;
       --overlay-width: min(640px, calc(100vw - 48px));
+      --title-banner-height: 84px;
     }
 
     * {
@@ -86,7 +87,7 @@
     }
 
     .tile.jiggle img {
-      animation: jiggle 450ms linear 2;
+      animation: pulse 320ms linear 1 both;
     }
 
     #status {
@@ -140,6 +141,30 @@
       text-wrap: balance;
     }
 
+    #title-banner {
+      position: fixed;
+      top: 0;
+      left: 0;
+      z-index: 4;
+      width: 100%;
+      height: var(--title-banner-height);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 24px;
+      background: rgba(0, 0, 0, 0.5);
+      color: rgba(255, 255, 255, 0.94);
+      font-size: clamp(20px, 3vw, 34px);
+      letter-spacing: 0.03em;
+      text-align: center;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    #title-banner.visible {
+      animation: title-banner-fade 2s linear both;
+    }
+
     @keyframes flip-in {
       0% {
         opacity: 0;
@@ -157,25 +182,35 @@
       }
     }
 
-    @keyframes jiggle {
+    @keyframes pulse {
       0% {
-        transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
-      }
-
-      25% {
-        transform: translate3d(-1px, 0, 0) rotate(-0.4deg) scale(1.01);
+        transform: scale(1);
       }
 
       50% {
-        transform: translate3d(1px, -1px, 0) rotate(0.35deg) scale(1.012);
-      }
-
-      75% {
-        transform: translate3d(0, 1px, 0) rotate(-0.25deg) scale(1.008);
+        transform: scale(1.035);
       }
 
       100% {
-        transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+        transform: scale(1);
+      }
+    }
+
+    @keyframes title-banner-fade {
+      0% {
+        opacity: 0;
+      }
+
+      12% {
+        opacity: 1;
+      }
+
+      72% {
+        opacity: 1;
+      }
+
+      100% {
+        opacity: 0;
       }
     }
   </style>
@@ -234,6 +269,8 @@
     let nextOlderMaxId = null;
     let hasMoreOlderArtwork = true;
     let isLoadingOlderArtwork = false;
+    let titleBannerTimer = null;
+    let wasAtTop = true;
 
     function getRefreshIntervalMs() {
       return 15000;
@@ -251,6 +288,29 @@
 
     function applyPageTitle() {
       document.title = getStationConfig().title;
+    }
+
+    function applyTitleBannerSizing() {
+      document.documentElement.style.setProperty("--title-banner-height", `${Math.max(28, getLayoutMetrics().tileSize * 0.25)}px`);
+    }
+
+    function showTitleBanner() {
+      const banner = document.getElementById("title-banner");
+      window.clearTimeout(titleBannerTimer);
+      banner.textContent = getStationConfig().title;
+      banner.classList.remove("visible");
+      void banner.offsetWidth;
+      banner.classList.add("visible");
+      titleBannerTimer = window.setTimeout(() => {
+        banner.classList.remove("visible");
+      }, 2000);
+    }
+
+    function getInitialBannerDelayMs() {
+      const visibleTileCount = getMinimumVisibleCount();
+      const stepDelay = getAnimationStepDelay(visibleTileCount);
+      const flipDuration = 450;
+      return Math.max(0, ((visibleTileCount - 1) * stepDelay) + flipDuration);
     }
 
     function isTouchLikeDevice() {
@@ -286,6 +346,7 @@
 
     function applyResponsiveSizing() {
       document.documentElement.style.setProperty("--tile-size", `${getLayoutMetrics().tileSize}px`);
+      applyTitleBannerSizing();
     }
 
     function withCacheBust(url) {
@@ -571,6 +632,25 @@
         });
     }
 
+    function animateFirstDisplayTiles(tiles) {
+      const visibleTiles = tiles.filter((tile) => tile.dataset.awaitingFirstDisplay === "true" && isTileVisible(tile));
+      const stepDelay = getAnimationStepDelay(visibleTiles.length);
+
+      visibleTiles.forEach((tile, index) => {
+        tile.style.removeProperty("--row-delay-value");
+        window.setTimeout(() => {
+          tile.classList.remove("pending");
+          tile.classList.add("flip");
+          delete tile.dataset.awaitingFirstDisplay;
+        }, index * stepDelay);
+      });
+    }
+
+    function revealPendingTilesInView() {
+      const pendingTiles = Array.from(document.querySelectorAll('.tile[data-awaiting-first-display="true"]'));
+      animateFirstDisplayTiles(pendingTiles);
+    }
+
     function shouldLoadOlderArtwork() {
       const remaining = document.documentElement.scrollHeight - (window.scrollY + window.innerHeight);
       return remaining < window.innerHeight * 1.5;
@@ -728,7 +808,8 @@
       });
     }
 
-    async function renderArtwork(items) {
+    async function renderArtwork(items, options = {}) {
+      const { animateVisible = true } = options;
       const wall = document.getElementById("wall");
       const { columns } = getGridDimensions();
       const shouldWaitForInitialLoad = !hasCompletedInitialRender;
@@ -763,9 +844,15 @@
         }
       }
 
-      window.requestAnimationFrame(() => {
-        animateVisibleTiles(Array.from(wall.querySelectorAll(".tile")));
-      });
+      if (animateVisible) {
+        window.requestAnimationFrame(() => {
+          animateVisibleTiles(Array.from(wall.querySelectorAll(".tile")));
+        });
+      } else {
+        wall.querySelectorAll(".tile").forEach((tile) => {
+          tile.classList.remove("pending");
+        });
+      }
 
       hasCompletedInitialRender = true;
       hideStatus();
@@ -783,6 +870,7 @@
 
       items.forEach((item, index) => {
         const tile = createTile(item, startingIndex + index);
+        tile.dataset.awaitingFirstDisplay = "true";
         appendedTiles.push(tile);
         fragment.appendChild(tile);
       });
@@ -796,9 +884,7 @@
         await preloadArtwork(nearViewportItems);
       }
 
-      window.requestAnimationFrame(() => {
-        animateVisibleTiles(appendedTiles);
-      });
+      revealPendingTilesInView();
     }
 
     async function loadInitialArtwork() {
@@ -912,6 +998,7 @@
         if (latestArtwork.length) {
           renderArtwork(latestArtwork);
         }
+        revealPendingTilesInView();
       }, RESIZE_DEBOUNCE_MS);
     }
 
@@ -920,12 +1007,23 @@
       applyPageTitle();
       showStatus("Loading artwork");
       refreshArtwork();
+      window.setTimeout(() => {
+        showTitleBanner();
+      }, getInitialBannerDelayMs());
       window.addEventListener("resize", handleResize);
       window.addEventListener("scroll", () => {
         scheduleRefresh();
         if (shouldLoadOlderArtwork()) {
           loadOlderArtwork();
         }
+        revealPendingTilesInView();
+        const isAtTop = window.scrollY <= 0;
+
+        if (isAtTop && !wasAtTop) {
+          showTitleBanner();
+        }
+
+        wasAtTop = isAtTop;
       }, { passive: true });
       window.addEventListener("mousemove", (event) => {
         if (!activeHoverTile || !overlayAnchorPoint) {
@@ -958,6 +1056,7 @@
 </head>
 <body>
   <div id="wall" aria-live="polite"></div>
+  <div id="title-banner" aria-hidden="true"></div>
   <div id="hover-overlay" hidden>
     <div id="hover-overlay-card"></div>
   </div>
