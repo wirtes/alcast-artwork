@@ -743,40 +743,6 @@
     }
 
     function attachHoverBehavior(tile, item) {
-      tile.addEventListener("mouseenter", (event) => {
-        if (isTouchLikeDevice()) {
-          return;
-        }
-
-        hoverPoint = { x: event.clientX + 16, y: event.clientY + 16 };
-        window.clearTimeout(hoverTimer);
-        hoverTimer = window.setTimeout(() => {
-          showHoverOverlay(tile, item);
-        }, HOVER_DELAY_MS);
-      });
-
-      tile.addEventListener("mousemove", (event) => {
-        if (isTouchLikeDevice()) {
-          return;
-        }
-
-        hoverPoint = { x: event.clientX + 16, y: event.clientY + 16 };
-      });
-
-      tile.addEventListener("mouseleave", () => {
-        if (isTouchLikeDevice()) {
-          return;
-        }
-
-        window.clearTimeout(hoverTimer);
-        hoverTimer = null;
-        hoverPoint = null;
-
-        if (activeHoverTile === tile) {
-          clearHoverState();
-        }
-      });
-
       tile.addEventListener("click", (event) => {
         event.stopPropagation();
         hoverPoint = { x: event.clientX + 16, y: event.clientY + 16 };
