@@ -56,12 +56,17 @@
       width: 100%;
       aspect-ratio: 1 / 1;
       overflow: hidden;
+      touch-action: manipulation;
       background:
         linear-gradient(135deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0)),
         #111;
       backface-visibility: hidden;
       transform-origin: center center;
       will-change: transform, opacity;
+    }
+
+    .tile.pending {
+      opacity: 0;
     }
 
     .tile img {
@@ -502,21 +507,6 @@
       })));
     }
 
-    function buildRandomDelays(totalTiles) {
-      const order = Array.from({ length: totalTiles }, (_, index) => index);
-
-      for (let index = order.length - 1; index > 0; index -= 1) {
-        const swapIndex = Math.floor(Math.random() * (index + 1));
-        [order[index], order[swapIndex]] = [order[swapIndex], order[index]];
-      }
-
-      const delays = new Array(totalTiles);
-      order.forEach((tileIndex, animationIndex) => {
-        delays[tileIndex] = animationIndex * 50;
-      });
-      return delays;
-    }
-
     function syncWallLayout(itemCount) {
       const wall = document.getElementById("wall");
       const { columns } = getGridDimensions();
@@ -529,7 +519,7 @@
 
     function createTile(item, index, eagerThreshold = 0) {
       const tile = document.createElement("div");
-      tile.className = "tile";
+      tile.className = "tile pending";
       tile.dataset.itemId = item.id;
 
       const img = document.createElement("img");
@@ -554,14 +544,31 @@
       return rect.bottom > -margin && rect.top < window.innerHeight + margin;
     }
 
+    function getAnimationStepDelay(tileCount) {
+      const normalizedCount = Math.max(1, tileCount);
+      const baselineCount = 8;
+      const baselineDelay = 50;
+
+      return Math.max(6, Math.round((baselineDelay * baselineCount) / normalizedCount));
+    }
+
     function animateVisibleTiles(tiles) {
       const visibleTiles = tiles.filter(isTileVisible);
-      const delays = buildRandomDelays(visibleTiles.length);
+      const stepDelay = getAnimationStepDelay(visibleTiles.length);
 
       visibleTiles.forEach((tile, index) => {
-        tile.style.setProperty("--row-delay-value", `${delays[index]}ms`);
-        tile.classList.add("flip");
+        tile.style.removeProperty("--row-delay-value");
+        window.setTimeout(() => {
+          tile.classList.remove("pending");
+          tile.classList.add("flip");
+        }, index * stepDelay);
       });
+
+      tiles
+        .filter((tile) => !isTileVisible(tile))
+        .forEach((tile) => {
+          tile.classList.remove("pending");
+        });
     }
 
     function shouldLoadOlderArtwork() {
@@ -708,12 +715,8 @@
         }
       });
 
-      tile.addEventListener("pointerup", (event) => {
-        if (!isTouchLikeDevice() || event.pointerType === "mouse") {
-          return;
-        }
-
-        event.preventDefault();
+      tile.addEventListener("click", (event) => {
+        event.stopPropagation();
         hoverPoint = { x: event.clientX + 16, y: event.clientY + 16 };
 
         if (activeHoverItemId === item.id) {
