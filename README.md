@@ -4,10 +4,6 @@
 
 The page is designed for passive display use. It continuously refreshes, redraws the wall with animation, and shows hover text pulled from the related Mastodon post.
 
-## Files
-
-- [covers.html](/Users/wirtes/Code/Codex Projects/alcast-artwork/covers.html) is the main page.
-
 ## URL Parameters
 
 The page supports one query parameter:
