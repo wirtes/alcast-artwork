@@ -8,7 +8,6 @@
     :root {
       --tile-size: 250px;
       --flip-duration: 450ms;
-      --row-stagger: 100ms;
       --bg: #050505;
       --overlay-width: min(640px, calc(100vw - 48px));
       --title-banner-height: 84px;
@@ -83,7 +82,6 @@
 
     .tile.flip {
       animation: flip-in var(--flip-duration) linear both;
-      animation-delay: var(--row-delay-value, 0ms);
     }
 
     .tile.jiggle img {
@@ -212,27 +210,32 @@
       alcast: {
         acct: "alcastradio",
         profileUrl: "https://mastodon.social/@alcastradio",
-        title: "Alcast Cover Wall"
+        title: "The Alcast Cover Wall",
+        station_label: "The Alcast"
       },
       kvcu: {
         acct: "1190playlist@mastodon.social",
         profileUrl: "https://mastodon.social/@1190playlist@mastodon.social",
-        title: "Radio 1190 Cover Wall"
+        title: "Radio 1190 Cover Wall",
+        station_label: "Radio 1190"
       },
       kuvo: {
         acct: "kuvo_playlist",
         profileUrl: "https://mastodon.social/@kuvo_playlist",
-        title: "KUVO Cover Wall"
+        title: "KUVO Cover Wall",
+        station_label: "KUVO Jazz"
       },
       kjac: {
         acct: "the_colorado_sound_playlist",
         profileUrl: "https://mastodon.social/@the_colorado_sound_playlist",
-        title: "The Colorado Sound Cover Wall"
+        title: "The Colorado Sound Cover Wall",
+        station_label: "The Colorado Sound"
       },
       kvoq: {
         acct: "indie1023_playlist",
         profileUrl: "https://mastodon.social/@indie1023_playlist",
-        title: "Indie 102.3 Coverwall"
+        title: "Indie 102.3 Cover Wall",
+        station_label: "Indie 102.3"
       }
     };
 
@@ -281,7 +284,7 @@
     function showTitleBanner() {
       const banner = document.getElementById("title-banner");
       window.clearTimeout(titleBannerTimer);
-      banner.textContent = getStationConfig().title;
+      banner.textContent = getStationConfig().station_label;
       banner.classList.remove("visible");
       void banner.offsetWidth;
       banner.classList.add("visible");
@@ -533,12 +536,8 @@
       return lines.join("\n").trim();
     }
 
-    function getGridDimensions() {
-      return getLayoutMetrics();
-    }
-
     function getMinimumVisibleCount() {
-      const { columns, rows } = getGridDimensions();
+      const { columns, rows } = getLayoutMetrics();
       return columns * rows;
     }
 
@@ -565,7 +564,7 @@
 
     function syncWallLayout(itemCount) {
       const wall = document.getElementById("wall");
-      const { columns } = getGridDimensions();
+      const { columns } = getLayoutMetrics();
 
       wall.style.gridTemplateColumns = `repeat(${columns}, minmax(0, 1fr))`;
       wall.style.gridTemplateRows = "";
@@ -613,7 +612,6 @@
       const stepDelay = getAnimationStepDelay(visibleTiles.length);
 
       visibleTiles.forEach((tile, index) => {
-        tile.style.removeProperty("--row-delay-value");
         window.setTimeout(() => {
           tile.classList.remove("pending");
           tile.classList.add("flip");
@@ -632,7 +630,6 @@
       const stepDelay = getAnimationStepDelay(visibleTiles.length);
 
       visibleTiles.forEach((tile, index) => {
-        tile.style.removeProperty("--row-delay-value");
         window.setTimeout(() => {
           tile.classList.remove("pending");
           tile.classList.add("flip");
@@ -793,10 +790,9 @@
       });
     }
 
-    async function renderArtwork(items, options = {}) {
-      const { animateVisible = true } = options;
+    async function renderArtwork(items) {
       const wall = document.getElementById("wall");
-      const { columns } = getGridDimensions();
+      const { columns } = getLayoutMetrics();
       const shouldWaitForInitialLoad = !hasCompletedInitialRender;
       const preservedHoverItemId = activeHoverItemId;
       const preservedHoverText = activeHoverText;
@@ -829,15 +825,9 @@
         }
       }
 
-      if (animateVisible) {
-        window.requestAnimationFrame(() => {
-          animateVisibleTiles(Array.from(wall.querySelectorAll(".tile")));
-        });
-      } else {
-        wall.querySelectorAll(".tile").forEach((tile) => {
-          tile.classList.remove("pending");
-        });
-      }
+      window.requestAnimationFrame(() => {
+        animateVisibleTiles(Array.from(wall.querySelectorAll(".tile")));
+      });
 
       hasCompletedInitialRender = true;
     }
