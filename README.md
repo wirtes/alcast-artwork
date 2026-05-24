@@ -8,20 +8,6 @@ The page is designed for passive display use. It continuously refreshes, redraws
 
 - [covers.html](/Users/wirtes/Code/Codex Projects/alcast-artwork/covers.html) is the main page.
 
-## Running Locally
-
-Serve the folder with a local web server and open `covers.html` in a browser.
-
-Example:
-
-```bash
-python3 -m http.server 8000
-```
-
-Then open:
-
-- `http://127.0.0.1:8000/covers.html`
-
 ## URL Parameters
 
 The page supports one query parameter:
@@ -33,12 +19,6 @@ The page supports one query parameter:
 `station` selects which Mastodon account the page uses as its artwork source.
 
 The value is normalized to lowercase before matching, so uppercase and mixed-case values are accepted.
-
-Examples:
-
-- `station=kvcu`
-- `station=KVCU`
-- `station=KvCu`
 
 If `station` is missing, the page defaults to `alcast`.
 
@@ -93,8 +73,6 @@ If `station` is present but not recognized, the page also falls back to `alcast`
 
 The page checks for new artwork every 15 seconds.
 
-This interval is built into the page and is not configurable by URL parameter.
-
 ## Feed Behavior
 
 The page looks up the selected Mastodon account through Mastodon’s public account lookup API, then loads public statuses from that account.
@@ -116,10 +94,6 @@ Behavior:
 
 - Covers are deduplicated by image URL.
 - Covers are sorted newest-first.
-- The wall uses the newest unique image-bearing posts first.
-- The page does not intentionally repeat covers to fill empty space.
-
-If a feed does not have enough unique image posts available to fill a very large viewport, the wall may show fewer tiles than the theoretical maximum until more artwork is available.
 
 ## Overlay Text Cleanup
 
@@ -138,10 +112,11 @@ Behavior:
 Hover behavior works like this:
 
 - A cover must be hovered for 1 full second before the overlay appears.
+- A click or tap on the cover also triggers the overlay
 - The overlay appears near the mouse position.
 - The hovered tile gets a brief jiggle when the overlay appears.
 - The overlay disappears after 5 seconds or as soon as the mouse moves.
-- If the wall redraws and the same hovered item is still present, the hover can be preserved across the redraw.
+- If the wall redraws and the same hovered item is still present, the hover will be preserved across the redraw.
 
 ## Visual Behavior
 
@@ -151,7 +126,6 @@ The page:
 - Uses responsive square tiles sized to fit the window width cleanly
 - Crops artwork to square using `object-fit: cover`
 - Refreshes dynamically without a full page reload
-- Animates redraws in randomized tile order
 
 On first load, the page waits until the visible artwork set has loaded before starting the opening animation.
 
@@ -160,3 +134,5 @@ On first load, the page waits until the visible artwork set has loaded before st
 - The page depends on Mastodon public endpoints being reachable from the browser.
 - Because the content source is live, visible artwork changes over time.
 - Different stations may have slightly different post formatting, so overlay text cleanup is intentionally conservative and targeted at trailing metadata.
+
+
