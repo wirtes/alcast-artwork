@@ -2,7 +2,7 @@
 
 `covers.html` is a self-contained artwork wall that pulls album cover images from Mastodon playlist accounts and fills the browser window with a responsive tiled grid.
 
-The page is designed for passive display use. It continuously refreshes, redraws the wall with animation, and shows hover text pulled from the related Mastodon post.
+The page is designed for passive display use. It continuously checks for new posts and redraws the wall with animation when a new post has been made with an image of an album cover. If no album art is attached the the playlist post, nothing is displayed. If this is actively being used for playlist navigation, I can be talked into putting a placeholder image in for those cases. But it would be less beautiful.
 
 ## URL Parameters
 
@@ -18,7 +18,7 @@ The value is normalized to lowercase before matching, so uppercase and mixed-cas
 
 If `station` is missing, the page defaults to `alcast`.
 
-If `station` is present but not recognized, the page also falls back to `alcast`.
+If `station` is present but not recognized, the page falls back to `alcast`.
 
 ### Supported `station` values
 
@@ -67,7 +67,7 @@ If `station` is present but not recognized, the page also falls back to `alcast`
 
 ## Refresh Behavior
 
-The page checks for new artwork every 15 seconds.
+The page checks for new artwork posts every 15 seconds.
 
 ## Feed Behavior
 
@@ -91,9 +91,17 @@ Behavior:
 - Covers are deduplicated by image URL.
 - Covers are sorted newest-first.
 
-## Overlay Text Cleanup
+## Interaction Behavior
 
-Hover text is derived from the Mastodon post text and then cleaned for display.
+Click/tap behavior works like this:
+
+- A click or tap on the cover  triggers the lightbox overlay. Click or tap outside the lightbox to dismiss.
+- The image is sized as large as possible for the window.
+- The song/artist/album info is listed under the image.
+
+## Lightbox Text Cleanup
+
+Text is derived from the Mastodon post text and then cleaned for display.
 
 This cleanup is intended to remove trailing hashtag blocks commonly appended by some stations.
 
@@ -103,16 +111,6 @@ Behavior:
 - Trailing inline hashtag blocks at the end of the last content line are removed.
 - Earlier hashtags that are part of the main sentence are preserved when possible.
 
-## Interaction Behavior
-
-Hover behavior works like this:
-
-- A cover must be hovered for 1 full second before the overlay appears.
-- A click or tap on the cover also triggers the overlay
-- The overlay appears near the mouse position.
-- The hovered tile gets a brief jiggle when the overlay appears.
-- The overlay disappears after 5 seconds or as soon as the mouse moves.
-- If the wall redraws and the same hovered item is still present, the hover will be preserved across the redraw.
 
 ## Visual Behavior
 
