@@ -1,6 +1,95 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <!--
+    The latest code can be found here: https://github.com/wirtes/alcast-artwork
+    
+    Download it. Customize it. Make it yours. Make it better.
+    
+    HOW TO REUSE THIS PAGE
+
+    This file is a self-contained Mastodon artwork wall. You can drop it onto a
+    normal web server and use it as-is, or adapt it for your own station,
+    playlist, or art feed.
+
+    The main things you will usually want to customize are:
+
+    1. STATION_CONFIGS
+       This is the primary configuration object in the script section below.
+       Each entry represents one feed source that the page can display.
+
+       For each station you can define:
+       - acct:
+         The Mastodon account identifier used for account lookup.
+       - profileUrl:
+         The public Mastodon profile URL for RSS fallback.
+       - title:
+         The full browser page title.
+       - station_label:
+         The shorter label used in the temporary top banner.
+       - strip_trailing_hashtags:
+         Set to true only if that feed tends to append hashtag-only blocks that
+         should be removed from the overlay text.
+
+       If you want to support your own feed, copy one of the existing station
+       entries and replace those values with your own.
+
+    2. URL behavior
+       This page currently reads the "station" query parameter and selects one
+       entry from STATION_CONFIGS. If the parameter is omitted or invalid, it
+       falls back to the default station.
+       
+       To change the default station, update the fallback value inside the
+       getStationKey() function.
+
+       Example:
+       covers.html?station=kvcu
+
+       If you only want one station and do not need switching, you can simplify
+       the code by removing the other entries and hard-coding the config lookup.
+
+    3. Visual sizing
+       Tile sizing is controlled by the layout helpers in the script and the
+       CSS variables near the top of this file. Mobile, tablet, and desktop are
+       intentionally handled differently so the artwork wall stays readable.
+
+    4. Overlay behavior
+       The overlay text is taken from the Mastodon post text associated with
+       each image. Click or tap behavior is wired in JavaScript, and the look of
+       the overlay is styled in the CSS rules for #hover-overlay and
+       #hover-overlay-card.
+
+    5. Banner behavior
+       The temporary title banner shown near the top of the page is styled by
+       #title-banner and uses station_label for its displayed text.
+
+    HOW THE PAGE WORKS
+
+    - It looks up the selected Mastodon account using the public Mastodon API.
+    - It fetches public posts from that account.
+    - It keeps only posts with image attachments.
+    - It builds a tiled wall of square covers.
+    - It refreshes periodically to check for newly posted artwork, but only 
+      redraws the page when new artwork is found.
+    - It will also load older artwork as the viewer scrolls down.
+
+    DEPLOYMENT NOTES
+
+    - This page is intended to be served over HTTP/HTTPS from a web server.
+    - Some browsers may block direct API access from file:// URLs.
+    - For local testing, run a simple web server such as:
+        python3 -m http.server 8000
+
+    SAFE CUSTOMIZATION ADVICE
+
+    If you are new to this file, the safest places to make edits are:
+    - the STATION_CONFIGS object
+    - The fallback value inside the getStationKey() function
+
+    If you change the data-loading functions, test carefully because the feed
+    refresh, infinite scroll, and first-display animation logic all depend on
+    those functions staying in sync.
+  -->
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Alcast Covers</title>
