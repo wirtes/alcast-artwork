@@ -55,10 +55,11 @@
        intentionally handled differently so the artwork wall stays readable.
 
     4. Overlay behavior
-       The overlay text is taken from the Mastodon post text associated with
-       each image. Click or tap behavior is wired in JavaScript, and the look of
-       the overlay is styled in the CSS rules for #hover-overlay and
-       #hover-overlay-card.
+       Clicking or tapping artwork opens a lightbox that shows the original
+       image as large as possible inside the browser window, with the related
+       Mastodon post text displayed underneath. The interaction is wired in
+       JavaScript, and the look of the overlay is styled in the CSS rules for
+       #lightbox-overlay and its child elements.
 
     5. Banner behavior
        The temporary title banner shown near the top of the page is styled by
@@ -99,7 +100,6 @@
       --tile-size: 250px;
       --flip-duration: 450ms;
       --bg: #050505;
-      --overlay-width: min(640px, calc(100vw - 48px));
       --title-banner-height: 84px;
     }
 
@@ -142,11 +142,17 @@
     }
 
     .tile {
+      appearance: none;
+      -webkit-appearance: none;
+      border: 0;
+      padding: 0;
+      margin: 0;
       position: relative;
       width: 100%;
       aspect-ratio: 1 / 1;
       overflow: hidden;
       touch-action: manipulation;
+      cursor: pointer;
       background:
         linear-gradient(135deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0)),
         #111;
@@ -178,37 +184,77 @@
       animation: pulse 320ms linear 1 both;
     }
 
-    #hover-overlay {
+    #lightbox-overlay {
       position: fixed;
       z-index: 3;
       left: 0;
       top: 0;
-      pointer-events: none;
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      background: rgba(0, 0, 0, 0.72);
+      pointer-events: auto;
       opacity: 0;
-      transform: translateY(12px);
-      transition: opacity 180ms linear, transform 180ms linear;
+      transition: opacity 180ms linear;
     }
 
-    #hover-overlay.visible {
+    #lightbox-overlay[hidden] {
+      display: none;
+    }
+
+    #lightbox-overlay.visible {
       opacity: 1;
-      transform: translateY(0);
     }
 
-    #hover-overlay-card {
-      width: var(--overlay-width);
-      padding: 14px 18px;
+    #lightbox-card {
+      width: fit-content;
+      max-width: calc(100vw - 48px);
+      max-height: calc(100vh - 48px);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+      padding: 20px;
       border: 1px solid rgba(255, 255, 255, 0.72);
-      border-radius: 16px;
+      border-radius: 18px;
       background: rgba(198, 191, 181, 0.8);
       color: rgba(18, 18, 18, 0.96);
       backdrop-filter: blur(18px);
       box-shadow:
         0 12px 28px rgba(0, 0, 0, 0.28),
         0 30px 64px rgba(0, 0, 0, 0.42);
+      overflow: hidden;
+    }
+
+    #lightbox-card[data-has-caption="false"] {
+      gap: 0;
+    }
+
+    #lightbox-image {
+      display: block;
+      max-width: none;
+      max-height: none;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      border-radius: 10px;
+    }
+
+    #lightbox-caption {
+      width: 100%;
+      max-width: var(--lightbox-caption-max-width, min(1100px, calc(100vw - 88px)));
       font-size: 15px;
       line-height: 1.45;
       letter-spacing: 0.01em;
-      text-wrap: balance;
+      text-align: left;
+      overflow-wrap: anywhere;
+    }
+
+    #lightbox-caption[hidden] {
+      display: none;
     }
 
     #title-banner {
@@ -289,9 +335,8 @@
     const DESKTOP_TILE_SIZE = 250;
     const TABLET_TILE_SIZE = 200;
     const MOBILE_TILE_SIZE = 160;
+    const OVERLAY_DISMISS_GUARD_MS = 250;
     const RESIZE_DEBOUNCE_MS = 120;
-    const HOVER_DELAY_MS = 1000;
-    const HOVER_IDLE_MS = 5000;
     const SCROLL_PRELOAD_VIEWPORTS = 2;
     const API_PAGE_SIZE = 40;
     const API_MAX_PAGES = 8;
@@ -338,14 +383,11 @@
     let refreshTimer = null;
     let resizeTimer = null;
     let refreshInFlight = false;
-    let hoverTimer = null;
-    let activeHoverTile = null;
-    let activeHoverItemId = null;
-    let activeHoverText = "";
-    let hoverPoint = null;
-    let overlayAnchorPoint = null;
+    let activeLightboxTile = null;
+    let activeLightboxItemId = null;
+    let activeLightboxItem = null;
+    let activeLightboxShownAt = 0;
     let hasCompletedInitialRender = false;
-    let hoverIdleTimer = null;
     let stationAccountPromise = null;
     let nextOlderMaxId = null;
     let hasMoreOlderArtwork = true;
@@ -672,9 +714,11 @@
     }
 
     function createTile(item, index, eagerThreshold = 0) {
-      const tile = document.createElement("div");
+      const tile = document.createElement("button");
       tile.className = "tile pending";
+      tile.type = "button";
       tile.dataset.itemId = item.id;
+      tile.setAttribute("aria-label", item.alt || "Open cover artwork");
 
       const img = document.createElement("img");
       img.src = item.url;
@@ -683,7 +727,7 @@
       img.decoding = "async";
 
       tile.appendChild(img);
-      attachHoverBehavior(tile, item);
+      attachTileLightboxBehavior(tile, item);
       return tile;
     }
 
@@ -754,104 +798,99 @@
       }, getRefreshIntervalMs());
     }
 
-    function clearHoverState() {
-      window.clearTimeout(hoverTimer);
-      hoverTimer = null;
-      window.clearTimeout(hoverIdleTimer);
-      hoverIdleTimer = null;
-
-      if (activeHoverTile) {
-        activeHoverTile.classList.remove("jiggle");
-        activeHoverTile = null;
+    function closeLightbox() {
+      if (activeLightboxTile) {
+        activeLightboxTile.classList.remove("jiggle");
+        activeLightboxTile = null;
       }
 
-      activeHoverItemId = null;
-      activeHoverText = "";
-      overlayAnchorPoint = null;
+      activeLightboxItemId = null;
+      activeLightboxItem = null;
+      activeLightboxShownAt = 0;
 
-      const overlay = document.getElementById("hover-overlay");
+      const overlay = document.getElementById("lightbox-overlay");
       overlay.classList.remove("visible");
       overlay.setAttribute("hidden", "");
-      document.getElementById("hover-overlay-card").textContent = "";
+      document.getElementById("lightbox-image").removeAttribute("src");
+      document.getElementById("lightbox-image").alt = "";
+      document.getElementById("lightbox-caption").textContent = "";
     }
 
-    function positionHoverOverlay() {
-      const overlay = document.getElementById("hover-overlay");
-      const card = document.getElementById("hover-overlay-card");
+    function updateLightboxLayout() {
+      const card = document.getElementById("lightbox-card");
+      const image = document.getElementById("lightbox-image");
+      const caption = document.getElementById("lightbox-caption");
+      const viewportPadding = 48;
+      const cardVerticalChrome = 58;
+      const cardHorizontalChrome = 42;
+      const availableWidth = Math.max(220, window.innerWidth - viewportPadding - cardHorizontalChrome);
+      const availableHeight = Math.max(180, window.innerHeight - viewportPadding - cardVerticalChrome - caption.offsetHeight);
+      const naturalWidth = image.naturalWidth || image.clientWidth || 1;
+      const naturalHeight = image.naturalHeight || image.clientHeight || 1;
+      const scale = Math.min(availableWidth / naturalWidth, availableHeight / naturalHeight);
+      const targetWidth = Math.max(220, Math.round(naturalWidth * scale));
+      const targetHeight = Math.max(140, Math.round(naturalHeight * scale));
 
-      if (!hoverPoint) {
-        overlay.style.left = "24px";
-        overlay.style.top = "24px";
+      image.style.width = `${targetWidth}px`;
+      image.style.height = `${targetHeight}px`;
+      card.style.setProperty("--lightbox-caption-max-width", `${targetWidth}px`);
+    }
+
+    function clearActiveTileOnly() {
+      if (activeLightboxTile) {
+        activeLightboxTile.classList.remove("jiggle");
+        activeLightboxTile = null;
+      }
+    }
+
+    function openLightbox(tile, item) {
+      clearActiveTileOnly();
+
+      if (!item?.url) {
         return;
       }
 
-      const maxLeft = Math.max(24, window.innerWidth - card.offsetWidth - 24);
-      const maxTop = Math.max(24, window.innerHeight - card.offsetHeight - 24);
-      const left = Math.min(Math.max(hoverPoint.x, 24), maxLeft);
-      const top = Math.min(Math.max(hoverPoint.y, 24), maxTop);
+      activeLightboxTile = tile;
+      activeLightboxItemId = item.id;
+      activeLightboxItem = item;
+      activeLightboxShownAt = Date.now();
+      activeLightboxTile.classList.add("jiggle");
 
-      overlay.style.left = `${left}px`;
-      overlay.style.top = `${top}px`;
-    }
+      const overlay = document.getElementById("lightbox-overlay");
+      const overlayImage = document.getElementById("lightbox-image");
+      const overlayCaption = document.getElementById("lightbox-caption");
+      const overlayCard = document.getElementById("lightbox-card");
+      const captionText = (item.text || "").trim();
 
-    function hideHoverTileOnly() {
-      if (activeHoverTile) {
-        activeHoverTile.classList.remove("jiggle");
-        activeHoverTile = null;
-      }
-    }
-
-    function startHoverDismissTimer() {
-      window.clearTimeout(hoverIdleTimer);
-      hoverIdleTimer = null;
-
-      if (!activeHoverTile) {
-        return;
-      }
-
-      hoverIdleTimer = window.setTimeout(() => {
-        clearHoverState();
-      }, HOVER_IDLE_MS);
-    }
-
-    function showHoverOverlay(tile, item) {
-      window.clearTimeout(hoverTimer);
-      hoverTimer = null;
-      hideHoverTileOnly();
-
-      if (!item || !item.text) {
-        return;
-      }
-
-      activeHoverTile = tile;
-      activeHoverItemId = item.id;
-      activeHoverText = item.text;
-      overlayAnchorPoint = hoverPoint ? { ...hoverPoint } : null;
-      activeHoverTile.classList.add("jiggle");
-
-      const overlay = document.getElementById("hover-overlay");
-      document.getElementById("hover-overlay-card").textContent = item.text;
+      overlayImage.src = item.url;
+      overlayImage.alt = item.alt || "Album cover artwork";
+      overlayCaption.textContent = captionText;
+      overlayCaption.hidden = !captionText;
+      overlayCard.dataset.hasCaption = captionText ? "true" : "false";
       overlay.removeAttribute("hidden");
-      positionHoverOverlay();
+      updateLightboxLayout();
 
       window.requestAnimationFrame(() => {
         overlay.classList.add("visible");
       });
-
-      startHoverDismissTimer();
     }
 
-    function attachHoverBehavior(tile, item) {
-      tile.addEventListener("click", (event) => {
+    function toggleLightbox(tile, item, event = null) {
+      if (event) {
         event.stopPropagation();
-        hoverPoint = { x: event.clientX + 16, y: event.clientY + 16 };
+      }
 
-        if (activeHoverItemId === item.id) {
-          clearHoverState();
-          return;
-        }
+      if (activeLightboxItemId === item.id) {
+        closeLightbox();
+        return;
+      }
 
-        showHoverOverlay(tile, item);
+      openLightbox(tile, item);
+    }
+
+    function attachTileLightboxBehavior(tile, item) {
+      tile.addEventListener("click", (event) => {
+        toggleLightbox(tile, item, event);
       });
     }
 
@@ -859,15 +898,14 @@
       const wall = document.getElementById("wall");
       const { columns } = getLayoutMetrics();
       const shouldWaitForInitialLoad = !hasCompletedInitialRender;
-      const preservedHoverItemId = activeHoverItemId;
-      const preservedHoverText = activeHoverText;
+      const preservedLightboxItem = activeLightboxItem;
 
       if (shouldWaitForInitialLoad) {
         await preloadArtwork(items.slice(0, getMinimumVisibleCount()));
       }
 
       syncWallLayout(items.length);
-      hideHoverTileOnly();
+      clearActiveTileOnly();
 
       const fragment = document.createDocumentFragment();
 
@@ -877,16 +915,13 @@
 
       wall.replaceChildren(fragment);
 
-      if (preservedHoverItemId && preservedHoverText) {
-        const nextHoverTile = wall.querySelector(`[data-item-id="${CSS.escape(preservedHoverItemId)}"]`);
+      if (preservedLightboxItem?.id) {
+        const nextLightboxTile = wall.querySelector(`[data-item-id="${CSS.escape(preservedLightboxItem.id)}"]`);
 
-        if (nextHoverTile) {
-          showHoverOverlay(nextHoverTile, {
-            id: preservedHoverItemId,
-            text: preservedHoverText
-          });
+        if (nextLightboxTile) {
+          openLightbox(nextLightboxTile, preservedLightboxItem);
         } else {
-          clearHoverState();
+          closeLightbox();
         }
       }
 
@@ -1030,6 +1065,9 @@
         if (latestArtwork.length && shouldRerenderForResize()) {
           renderArtwork(latestArtwork);
         }
+        if (activeLightboxItemId) {
+          updateLightboxLayout();
+        }
         revealPendingTilesInView();
       }, RESIZE_DEBOUNCE_MS);
     }
@@ -1057,30 +1095,16 @@
 
         wasAtTop = isAtTop;
       }, { passive: true });
-      window.addEventListener("mousemove", (event) => {
-        if (!activeHoverTile || !overlayAnchorPoint) {
+      document.getElementById("lightbox-overlay").addEventListener("click", () => {
+        if ((Date.now() - activeLightboxShownAt) < OVERLAY_DISMISS_GUARD_MS) {
           return;
         }
-
-        const nextPoint = { x: event.clientX + 16, y: event.clientY + 16 };
-        const moved = nextPoint.x !== overlayAnchorPoint.x || nextPoint.y !== overlayAnchorPoint.y;
-
-        if (moved) {
-          clearHoverState();
-        }
+        closeLightbox();
       });
-      window.addEventListener("pointermove", (event) => {
-        if (event.pointerType === "mouse" || !activeHoverTile || !overlayAnchorPoint) {
-          return;
-        }
-
-        const nextPoint = { x: event.clientX + 16, y: event.clientY + 16 };
-        const moved = nextPoint.x !== overlayAnchorPoint.x || nextPoint.y !== overlayAnchorPoint.y;
-
-        if (moved) {
-          clearHoverState();
-        }
-      }, { passive: true });
+      document.getElementById("lightbox-card").addEventListener("click", (event) => {
+        event.stopPropagation();
+      });
+      document.getElementById("lightbox-image").addEventListener("load", updateLightboxLayout);
     }
 
     window.addEventListener("DOMContentLoaded", start);
@@ -1089,8 +1113,11 @@
 <body>
   <div id="wall" aria-live="polite"></div>
   <div id="title-banner" aria-hidden="true"></div>
-  <div id="hover-overlay" hidden>
-    <div id="hover-overlay-card"></div>
+  <div id="lightbox-overlay" hidden>
+    <div id="lightbox-card">
+      <img id="lightbox-image" alt="">
+      <div id="lightbox-caption"></div>
+    </div>
   </div>
 </body>
 </html>
