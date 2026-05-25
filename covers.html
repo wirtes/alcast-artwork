@@ -188,8 +188,8 @@
       z-index: 3;
       left: 0;
       top: 0;
-      width: 100vw;
-      height: 100vh;
+      right: 0;
+      bottom: 0;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -210,8 +210,8 @@
 
     #lightbox-card {
       width: fit-content;
-      max-width: calc(100vw - 48px);
-      max-height: calc(100vh - 48px);
+      max-width: calc(100% - 48px);
+      max-height: calc(100% - 48px);
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -440,8 +440,21 @@
       return window.matchMedia("(hover: none), (pointer: coarse)").matches;
     }
 
+    function getViewportDimensions() {
+      const layoutWidth = document.documentElement.clientWidth || 0;
+      const layoutHeight = document.documentElement.clientHeight || 0;
+      const visualWidth = window.visualViewport ? Math.round(window.visualViewport.width) : 0;
+      const visualHeight = window.visualViewport ? Math.round(window.visualViewport.height) : 0;
+
+      return {
+        width: Math.max(layoutWidth, window.innerWidth || 0, visualWidth, 1),
+        height: Math.max(layoutHeight, window.innerHeight || 0, visualHeight, 1)
+      };
+    }
+
     function getLayoutMetrics() {
-      const width = Math.max(window.innerWidth, 1);
+      const viewport = getViewportDimensions();
+      const width = viewport.width;
       let columns;
 
       if (width <= 640) {
@@ -462,7 +475,7 @@
       const tileSize = width / columns;
       return {
         columns,
-        rows: Math.max(1, Math.ceil(window.innerHeight / tileSize)),
+        rows: Math.max(1, Math.ceil(viewport.height / tileSize)),
         tileSize
       };
     }
@@ -473,10 +486,10 @@
     }
 
     function shouldRerenderForResize() {
-      const widthChanged = Math.abs(window.innerWidth - lastLayoutWidth) > 1;
+      const widthChanged = Math.abs(getViewportDimensions().width - lastLayoutWidth) > 1;
 
       if (widthChanged) {
-        lastLayoutWidth = window.innerWidth;
+        lastLayoutWidth = getViewportDimensions().width;
         return true;
       }
 
@@ -750,13 +763,14 @@
 
     function isTileVisible(tile) {
       const rect = tile.getBoundingClientRect();
-      return rect.bottom > 0 && rect.top < window.innerHeight;
+      return rect.bottom > 0 && rect.top < getViewportDimensions().height;
     }
 
     function isTileNearViewport(tile) {
       const rect = tile.getBoundingClientRect();
-      const margin = window.innerHeight * SCROLL_PRELOAD_VIEWPORTS;
-      return rect.bottom > -margin && rect.top < window.innerHeight + margin;
+      const viewportHeight = getViewportDimensions().height;
+      const margin = viewportHeight * SCROLL_PRELOAD_VIEWPORTS;
+      return rect.bottom > -margin && rect.top < viewportHeight + margin;
     }
 
     function getAnimationStepDelay(tileCount) {
@@ -804,8 +818,9 @@
     }
 
     function shouldLoadOlderArtwork() {
-      const remaining = document.documentElement.scrollHeight - (window.scrollY + window.innerHeight);
-      return remaining < window.innerHeight * 1.5;
+      const viewportHeight = getViewportDimensions().height;
+      const remaining = document.documentElement.scrollHeight - (window.scrollY + viewportHeight);
+      return remaining < viewportHeight * 1.5;
     }
 
     function scheduleRefresh() {
@@ -837,11 +852,12 @@
       const card = document.getElementById("lightbox-card");
       const image = document.getElementById("lightbox-image");
       const caption = document.getElementById("lightbox-caption");
+      const viewport = getViewportDimensions();
       const viewportPadding = 48;
       const cardVerticalChrome = 58;
       const cardHorizontalChrome = 42;
-      const availableWidth = Math.max(220, window.innerWidth - viewportPadding - cardHorizontalChrome);
-      const availableHeight = Math.max(180, window.innerHeight - viewportPadding - cardVerticalChrome - caption.offsetHeight);
+      const availableWidth = Math.max(220, viewport.width - viewportPadding - cardHorizontalChrome);
+      const availableHeight = Math.max(180, viewport.height - viewportPadding - cardVerticalChrome - caption.offsetHeight);
       const naturalWidth = image.naturalWidth || image.clientWidth || 1;
       const naturalHeight = image.naturalHeight || image.clientHeight || 1;
       const scale = Math.min(availableWidth / naturalWidth, availableHeight / naturalHeight);
@@ -1095,7 +1111,7 @@
 
     function start() {
       applyResponsiveSizing();
-      lastLayoutWidth = window.innerWidth;
+      lastLayoutWidth = getViewportDimensions().width;
       applyPageTitle();
       refreshArtwork();
       window.setTimeout(() => {
@@ -1126,6 +1142,9 @@
         event.stopPropagation();
       });
       document.getElementById("lightbox-image").addEventListener("load", updateLightboxLayout);
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener("resize", handleResize);
+      }
     }
 
     window.addEventListener("DOMContentLoaded", start);
