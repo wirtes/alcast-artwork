@@ -209,9 +209,9 @@
     }
 
     #lightbox-card {
-      width: fit-content;
-      max-width: calc(100% - 48px);
-      max-height: calc(100% - 48px);
+      width: min(var(--lightbox-card-width, calc(100vw - 48px)), calc(100vw - 48px));
+      max-width: calc(100vw - 48px);
+      max-height: calc(100vh - 48px);
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -228,23 +228,29 @@
       overflow: hidden;
     }
 
-    #lightbox-card[data-has-caption="false"] {
-      gap: 0;
+    #lightbox-media {
+      width: var(--lightbox-media-width, 100%);
+      max-width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 auto;
     }
 
     #lightbox-image {
       display: block;
-      max-width: none;
-      max-height: none;
-      width: auto;
+      width: 100%;
+      max-width: 100%;
       height: auto;
       object-fit: contain;
       border-radius: 10px;
     }
 
     #lightbox-caption {
-      width: 100%;
-      max-width: var(--lightbox-caption-max-width, min(1100px, calc(100vw - 88px)));
+      width: var(--lightbox-media-width, 100%);
+      min-width: 0;
+      max-width: 100%;
+      box-sizing: border-box;
       font-size: 15px;
       line-height: 1.45;
       letter-spacing: 0.01em;
@@ -850,23 +856,30 @@
 
     function updateLightboxLayout() {
       const card = document.getElementById("lightbox-card");
-      const image = document.getElementById("lightbox-image");
-      const caption = document.getElementById("lightbox-caption");
+      const media = document.getElementById("lightbox-media");
       const viewport = getViewportDimensions();
-      const viewportPadding = 48;
-      const cardVerticalChrome = 58;
-      const cardHorizontalChrome = 42;
-      const availableWidth = Math.max(220, viewport.width - viewportPadding - cardHorizontalChrome);
-      const availableHeight = Math.max(180, viewport.height - viewportPadding - cardVerticalChrome - caption.offsetHeight);
-      const naturalWidth = image.naturalWidth || image.clientWidth || 1;
-      const naturalHeight = image.naturalHeight || image.clientHeight || 1;
-      const scale = Math.min(availableWidth / naturalWidth, availableHeight / naturalHeight);
-      const targetWidth = Math.max(220, Math.round(naturalWidth * scale));
-      const targetHeight = Math.max(140, Math.round(naturalHeight * scale));
+      const maxCardWidth = Math.max(180, viewport.width - 48);
+      const maxCardHeight = Math.max(180, viewport.height - 48);
+      const mediaChromeWidth = 42;
+      const maxMediaWidth = Math.max(120, maxCardWidth - mediaChromeWidth);
+      const minMediaWidth = Math.min(120, maxMediaWidth);
+      let mediaWidth = maxMediaWidth;
 
-      image.style.width = `${targetWidth}px`;
-      image.style.height = `${targetHeight}px`;
-      card.style.setProperty("--lightbox-caption-max-width", `${targetWidth}px`);
+      function applyMediaWidth(nextMediaWidth) {
+        const clampedMediaWidth = Math.max(minMediaWidth, nextMediaWidth);
+        const nextCardWidth = Math.min(maxCardWidth, clampedMediaWidth + mediaChromeWidth);
+
+        media.style.setProperty("--lightbox-media-width", `${clampedMediaWidth}px`);
+        card.style.setProperty("--lightbox-media-width", `${clampedMediaWidth}px`);
+        card.style.setProperty("--lightbox-card-width", `${nextCardWidth}px`);
+      }
+
+      applyMediaWidth(mediaWidth);
+
+      while (card.scrollHeight > maxCardHeight && mediaWidth > minMediaWidth) {
+        mediaWidth = Math.max(minMediaWidth, mediaWidth - 12);
+        applyMediaWidth(mediaWidth);
+      }
     }
 
     function clearActiveTileOnly() {
@@ -1155,7 +1168,9 @@
   <div id="title-banner" aria-hidden="true"></div>
   <div id="lightbox-overlay" hidden>
     <div id="lightbox-card">
-      <img id="lightbox-image" alt="">
+      <div id="lightbox-media">
+        <img id="lightbox-image" alt="">
+      </div>
       <div id="lightbox-caption"></div>
     </div>
   </div>
